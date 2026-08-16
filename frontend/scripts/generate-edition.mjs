@@ -7,6 +7,7 @@ const categories = ["politics", "sports", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
 const batchSize = 25;
+const feedAttempts = 3;
 
 const feeds = {
   national: {
@@ -47,18 +48,30 @@ async function articleText(url, fallback) {
 }
 
 async function fetchFeed(scope, category, url) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!response.ok) throw new Error(`Feed failed: ${scope}/${category}`);
-  const feed = await parser.parseString(await response.text());
-  const items = feed.items.slice(0, 25);
-  return Promise.all(items.map(async (item) => ({
-    scope,
-    category,
-    title: item.title || "Untitled story",
-    url: item.link || "https://news.google.com/",
-    published: item.pubDate || "",
-    text: await articleText(item.link || "https://news.google.com/", item.contentSnippet || item.content || ""),
-  })));
+  let lastError;
+
+  for (let attempt = 1; attempt <= feedAttempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const feed = await parser.parseString(await response.text());
+      const items = feed.items.slice(0, 25);
+      if (items.length === 0) throw new Error("empty feed");
+
+      return Promise.all(items.map(async (item) => ({
+        scope,
+        category,
+        title: item.title || "Untitled story",
+        url: item.link || "https://news.google.com/",
+        published: item.pubDate || "",
+        text: await articleText(item.link || "https://news.google.com/", item.contentSnippet || item.content || ""),
+      })));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(`Feed failed after ${feedAttempts} attempts: ${scope}/${category} (${lastError?.message || "unknown error"})`);
 }
 
 function deduplicate(items) {
@@ -74,7 +87,7 @@ function deduplicate(items) {
 }
 
 async function askNemotron(items) {
-  const prompt = `You are the final news editor. Evaluate every article. Keep only meaningful events that actually happened. Remove opinion, promotion, minor updates, and duplicates. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. Return ONLY valid JSON.
+  const prompt = `You are the final news editor. Evaluate every article. Keep only meaningful, important events that actually happened. Remove opinion, promotion, minor updates, and duplicates. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. For every scope and category represented in the input, mark at least the single most important article as keep=true. Never keep an article only because it is a headline. Return ONLY valid JSON.
 
 For each item return one decision with this shape:
 {"index":0,"keep":true,"importance":95,"short_summary":"maximum 30 words","extended_summary":"100-150 factual words"}
@@ -132,19 +145,22 @@ const feedResults = await Promise.allSettled(
 );
 const articles = deduplicate(feedResults.flatMap((result) => result.status === "fulfilled" ? result.value : []));
 const selected = [];
+const reviewed = [];
 
 for (let start = 0; start < articles.length; start += batchSize) {
   const batch = articles.slice(start, start + batchSize);
   const decisions = await askNemotron(batch);
   for (const decision of decisions) {
     const item = batch[decision.index];
-    if (!item || !decision.keep || !decision.short_summary) continue;
-    selected.push({
+    if (!item || !decision.short_summary) continue;
+    const reviewedArticle = {
       ...item,
       short_summary: decision.short_summary,
       extended_summary: decision.extended_summary || item.text.slice(0, 1000),
       importance: Number(decision.importance) || 0,
-    });
+    };
+    reviewed.push(reviewedArticle);
+    if (decision.keep) selected.push(reviewedArticle);
   }
 }
 
@@ -157,18 +173,17 @@ for (const scope of scopes) {
       .slice(0, maxPerCategory);
 
     if (categoryArticles.length === 0) {
-      const fallback = articles
+      const fallback = reviewed
         .filter((item) => item.scope === scope && item.category === category)
-        .sort((a, b) => new Date(b.published).getTime() - new Date(a.published).getTime())[0];
+        .sort((a, b) => b.importance - a.importance)[0];
 
       if (fallback) {
-        categoryArticles.push({
-          ...fallback,
-          short_summary: fallback.title,
-          extended_summary: fallback.text.slice(0, 1000),
-          importance: 0,
-        });
+        categoryArticles.push(fallback);
       }
+    }
+
+    if (categoryArticles.length === 0) {
+      throw new Error(`No articles available for ${scope}/${category}; edition was not published`);
     }
 
     payload[scope][category] = categoryArticles;
