@@ -151,10 +151,27 @@ for (let start = 0; start < articles.length; start += batchSize) {
 const payload = { national: {}, international: {} };
 for (const scope of scopes) {
   for (const category of categories) {
-    payload[scope][category] = selected
+    const categoryArticles = selected
       .filter((item) => item.scope === scope && item.category === category)
       .sort((a, b) => b.importance - a.importance)
       .slice(0, maxPerCategory);
+
+    if (categoryArticles.length === 0) {
+      const fallback = articles
+        .filter((item) => item.scope === scope && item.category === category)
+        .sort((a, b) => new Date(b.published).getTime() - new Date(a.published).getTime())[0];
+
+      if (fallback) {
+        categoryArticles.push({
+          ...fallback,
+          short_summary: fallback.title,
+          extended_summary: fallback.text.slice(0, 1000),
+          importance: 0,
+        });
+      }
+    }
+
+    payload[scope][category] = categoryArticles;
   }
 }
 

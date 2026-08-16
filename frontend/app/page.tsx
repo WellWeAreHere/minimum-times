@@ -28,6 +28,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [darkMode, setDarkMode] = useState(true);
+  const [selectedScope, setSelectedScope] = useState("national");
 
   function openArticle(article: Article) {
     setSelectedArticle((selected) =>
@@ -115,7 +116,36 @@ export default function Home() {
           </div>
         </header>
 
-        {scopes.map((scope) => (
+        <div className="flex gap-2 mb-10" role="tablist" aria-label="Edition scope">
+          {scopes.map((scope) => {
+            const isSelected = selectedScope === scope.key;
+            return (
+              <button
+                key={scope.key}
+                type="button"
+                role="tab"
+                aria-selected={isSelected}
+                onClick={() => {
+                  setSelectedScope(scope.key);
+                  setSelectedArticle(null);
+                }}
+                className={`border px-4 py-2 text-sm font-semibold transition ${
+                  isSelected
+                    ? darkMode
+                      ? "border-white bg-white text-black"
+                      : "border-black bg-black text-white"
+                    : darkMode
+                      ? "border-gray-700 text-gray-400 hover:border-gray-400"
+                      : "border-gray-300 text-gray-600 hover:border-gray-600"
+                }`}
+              >
+                {scope.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {scopes.filter((scope) => scope.key === selectedScope).map((scope) => (
           <section key={scope.key} className="mb-14">
             <h2 className="text-2xl font-bold border-b border-gray-700 pb-3 mb-6">
               {scope.label}
