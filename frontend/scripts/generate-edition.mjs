@@ -76,12 +76,26 @@ async function fetchFeed(scope, category, url) {
 
 function deduplicate(items) {
   const urls = new Set();
-  const titles = new Set();
+  const titles = [];
+
+  const words = (value) => new Set(
+    normalize(value)
+      .split(" ")
+      .filter((word) => word.length > 2 && !["the", "and", "for", "with", "until", "will", "from", "says"].includes(word))
+  );
+
+  const isNearDuplicate = (left, right) => {
+    const leftWords = words(left);
+    const rightWords = words(right);
+    const overlap = [...leftWords].filter((word) => rightWords.has(word)).length;
+    return overlap >= 4 && overlap / Math.min(leftWords.size, rightWords.size) >= 0.5;
+  };
+
   return items.filter((item) => {
     const title = normalize(item.title);
-    if (urls.has(item.url) || titles.has(title)) return false;
+    if (urls.has(item.url) || titles.some((existingTitle) => isNearDuplicate(title, existingTitle))) return false;
     urls.add(item.url);
-    titles.add(title);
+    titles.push(title);
     return true;
   });
 }
@@ -147,20 +161,28 @@ const articles = deduplicate(feedResults.flatMap((result) => result.status === "
 const selected = [];
 const reviewed = [];
 
-for (let start = 0; start < articles.length; start += batchSize) {
-  const batch = articles.slice(start, start + batchSize);
-  const decisions = await askNemotron(batch);
-  for (const decision of decisions) {
-    const item = batch[decision.index];
-    if (!item || !decision.short_summary) continue;
-    const reviewedArticle = {
-      ...item,
-      short_summary: decision.short_summary,
-      extended_summary: decision.extended_summary || item.text.slice(0, 1000),
-      importance: Number(decision.importance) || 0,
-    };
-    reviewed.push(reviewedArticle);
-    if (decision.keep) selected.push(reviewedArticle);
+for (const scope of scopes) {
+  for (const category of categories) {
+    const categoryArticles = articles.filter(
+      (item) => item.scope === scope && item.category === category
+    );
+
+    for (let start = 0; start < categoryArticles.length; start += batchSize) {
+      const batch = categoryArticles.slice(start, start + batchSize);
+      const decisions = await askNemotron(batch);
+      for (const decision of decisions) {
+        const item = batch[decision.index];
+        if (!item || !decision.short_summary) continue;
+        const reviewedArticle = {
+          ...item,
+          short_summary: decision.short_summary,
+          extended_summary: decision.extended_summary || item.text.slice(0, 1000),
+          importance: Number(decision.importance) || 0,
+        };
+        reviewed.push(reviewedArticle);
+        if (decision.keep) selected.push(reviewedArticle);
+      }
+    }
   }
 }
 
