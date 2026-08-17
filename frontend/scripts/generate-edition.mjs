@@ -271,7 +271,7 @@ for (const scope of scopes) {
     const categoryArticles = fetchedArticles.filter((item) => !previousMatches.includes(item));
 
     if (!categoryArticles.length) {
-      console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → 0 new after previous-edition check → 0 deduplicated → 0 reviewed → 0 kept`);
+      console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${previousMatches.length} similar to previous edition → 0 new → 0 deduplicated → 0 reviewed → 0 kept`);
       continue;
     }
 
@@ -315,7 +315,7 @@ for (const scope of scopes) {
       console.warn(`Review failed for ${scope}/${category}: ${error.message}`);
     }
 
-    console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${categoryArticles.length} new → ${headlineArticles.length} deduplicated → ${reviewArticles.length} reviewed → ${keptCount} kept`);
+    console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${previousMatches.length} similar to previous edition → ${categoryArticles.length} new → ${headlineArticles.length} deduplicated → ${reviewArticles.length} reviewed → ${keptCount} kept`);
   }
 }
 
