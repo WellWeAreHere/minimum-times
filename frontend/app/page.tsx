@@ -106,32 +106,34 @@ export default function Home() {
             <p className={`${darkMode ? "text-gray-400" : "text-gray-600"} mt-2`}>
               The minimum news you need.
             </p>
-            <button
-              type="button"
-              onClick={() => setDarkMode((value) => !value)}
-              className={`shrink-0 border px-3 py-2 text-xs font-semibold ${
-                darkMode
-                  ? "border-gray-700 text-gray-300 hover:bg-gray-900"
-                  : "border-gray-300 text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              {darkMode ? "LIGHT MODE" : "DARK MODE"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setExtremeMode((value) => !value)}
-              className={`shrink-0 border px-3 py-2 text-xs font-semibold ${
-                extremeMode
-                  ? darkMode
-                    ? "border-white bg-white text-black"
-                    : "border-black bg-black text-white"
-                  : darkMode
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={() => setDarkMode((value) => !value)}
+                className={`border px-3 py-2 text-xs font-semibold ${
+                  darkMode
                     ? "border-gray-700 text-gray-300 hover:bg-gray-900"
                     : "border-gray-300 text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              {extremeMode ? "NORMAL MODE" : "EXTREME MODE"}
-            </button>
+                }`}
+              >
+                {darkMode ? "LIGHT MODE" : "DARK MODE"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setExtremeMode((value) => !value)}
+                className={`border px-3 py-2 text-xs font-semibold ${
+                  extremeMode
+                    ? darkMode
+                      ? "border-white bg-white text-black"
+                      : "border-black bg-black text-white"
+                    : darkMode
+                      ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                      : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                {extremeMode ? "NORMAL MODE" : "EXTREME MODE"}
+              </button>
+            </div>
           </div>
         </header>
 
