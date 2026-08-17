@@ -29,8 +29,6 @@ for (const name of required) {
   if (!process.env[name]) throw new Error(`${name} is missing`);
 }
 
-const normalize = (value) => value.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
-
 async function articleText(url, fallback) {
   try {
     const response = await fetch(url, {
@@ -64,7 +62,7 @@ async function fetchFeed(scope, category, url) {
         title: item.title || "Untitled story",
         url: item.link || "https://news.google.com/",
         published: item.pubDate || "",
-        text: await articleText(item.link || "https://news.google.com/", item.contentSnippet || item.content || ""),
+        text: item.contentSnippet || item.content || "",
       })));
     } catch (error) {
       lastError = error;
@@ -74,40 +72,7 @@ async function fetchFeed(scope, category, url) {
   throw new Error(`Feed failed after ${feedAttempts} attempts: ${scope}/${category} (${lastError?.message || "unknown error"})`);
 }
 
-function deduplicate(items) {
-  const urls = new Set();
-  const titles = [];
-
-  const words = (value) => new Set(
-    normalize(value)
-      .split(" ")
-      .filter((word) => word.length > 2 && !["the", "and", "for", "with", "until", "will", "from", "says"].includes(word))
-  );
-
-  const isNearDuplicate = (left, right) => {
-    const leftWords = words(left);
-    const rightWords = words(right);
-    const overlap = [...leftWords].filter((word) => rightWords.has(word)).length;
-    return overlap >= 4 && overlap / Math.min(leftWords.size, rightWords.size) >= 0.5;
-  };
-
-  return items.filter((item) => {
-    const title = normalize(item.title);
-    if (urls.has(item.url) || titles.some((existingTitle) => isNearDuplicate(title, existingTitle))) return false;
-    urls.add(item.url);
-    titles.push(title);
-    return true;
-  });
-}
-
-async function askNemotron(items) {
-  const prompt = `You are the final news editor. Evaluate every article. Keep only meaningful, important events that actually happened. Remove opinion, promotion, minor updates, and duplicates. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. For every scope and category represented in the input, mark at least the single most important article as keep=true. Never keep an article only because it is a headline. Return ONLY valid JSON.
-
-For each item return one decision with this shape:
-{"index":0,"keep":true,"importance":95,"short_summary":"maximum 30 words","extended_summary":"100-150 factual words"}
-
-ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}\nCATEGORY: ${item.category}\nHEADLINE: ${item.title}\nARTICLE TEXT: ${item.text}`).join("\n\n")}`;
-
+async function askNemotron(prompt, maxTokens) {
   const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
     method: "POST",
     signal: AbortSignal.timeout(55000),
@@ -119,7 +84,7 @@ ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}
       model: "nvidia/nemotron-3-super-120b-a12b",
       temperature: 1,
       top_p: 0.95,
-      max_tokens: 8000,
+      max_tokens: maxTokens,
       reasoning_effort: "none",
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
@@ -131,6 +96,28 @@ ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}
   const content = data.choices?.[0]?.message?.content;
   const parsed = JSON.parse(content.replace(/^```json\s*|\s*```$/g, ""));
   return Array.isArray(parsed) ? parsed : parsed.decisions || [];
+}
+
+async function deduplicateWithNemotron(items) {
+  const prompt = `You are a news deduplication editor. Group headlines that report the same real-world event, even when wording or publishers differ. Keep exactly one representative from each group, preferring the clearest and most authoritative headline. Do not discard distinct events. Return ONLY valid JSON.
+
+For every item return one decision with this shape:
+{"index":0,"keep":true}
+
+HEADLINES:\n\n${items.map((item, index) => `INDEX: ${index}\nHEADLINE: ${item.title}\nURL: ${item.url}`).join("\n\n")}`;
+
+  return askNemotron(prompt, 2000);
+}
+
+async function reviewWithNemotron(items) {
+  const prompt = `You are the final news editor. Evaluate every article. Keep only meaningful, important events that actually happened. Remove opinion, promotion, and minor updates. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. Mark at least the single most important article as keep=true when articles are supplied. Never keep an article only because it is a headline. Return ONLY valid JSON.
+
+For each item return one decision with this shape:
+{"index":0,"keep":true,"importance":95,"short_summary":"maximum 30 words","extended_summary":"100-150 factual words"}
+
+ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}\nCATEGORY: ${item.category}\nHEADLINE: ${item.title}\nARTICLE TEXT: ${item.text}`).join("\n\n")}`;
+
+  return askNemotron(prompt, 8000);
 }
 
 async function saveEdition(date, payload) {
@@ -168,7 +155,7 @@ feedResults.forEach((result, index) => {
     console.warn(`Feed unavailable for ${task.scope}/${task.category}: ${result.reason?.message || result.reason}`);
   }
 });
-const articles = deduplicate(feedResults.flatMap((result) => result.status === "fulfilled" ? result.value : []));
+const articles = feedResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 const selected = [];
 const reviewed = [];
 
@@ -178,9 +165,25 @@ for (const scope of scopes) {
       (item) => item.scope === scope && item.category === category
     );
 
-    for (let start = 0; start < categoryArticles.length; start += batchSize) {
-      const batch = categoryArticles.slice(start, start + batchSize);
-      const decisions = await askNemotron(batch);
+    if (categoryArticles.length === 0) {
+      continue;
+    }
+
+    const dedupeDecisions = await deduplicateWithNemotron(categoryArticles);
+    const deduplicatedArticles = dedupeDecisions
+      .filter((decision) => decision.keep === true && categoryArticles[decision.index])
+      .map((decision) => categoryArticles[decision.index]);
+    const headlineArticles = deduplicatedArticles.length > 0 ? deduplicatedArticles : categoryArticles;
+    const reviewArticles = await Promise.all(
+      headlineArticles.map(async (item) => ({
+        ...item,
+        text: await articleText(item.url, item.text),
+      }))
+    );
+
+    for (let start = 0; start < reviewArticles.length; start += batchSize) {
+      const batch = reviewArticles.slice(start, start + batchSize);
+      const decisions = await reviewWithNemotron(batch);
       for (const decision of decisions) {
         const item = batch[decision.index];
         if (!item || !decision.short_summary) continue;
