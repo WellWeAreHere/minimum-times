@@ -53,7 +53,7 @@ async function fetchFeed(scope, category, url) {
       const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const feed = await parser.parseString(await response.text());
-      const items = feed.items.slice(0, 25);
+      const items = feed.items.slice(0, 50);
       if (items.length === 0) throw new Error("empty feed");
 
       return Promise.all(items.map(async (item) => ({
