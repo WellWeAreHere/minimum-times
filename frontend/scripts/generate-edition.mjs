@@ -6,7 +6,7 @@ const parser = new Parser();
 const categories = ["politics", "sports", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
-const batchSize = 25;
+const batchSize = 10;
 const feedAttempts = 3;
 
 const feeds = {
@@ -202,6 +202,20 @@ for (const scope of scopes) {
       if (fallback) {
         categoryArticles.push(fallback);
       }
+    }
+
+    if (categoryArticles.length === 0) {
+      const rawFallback = articles
+        .filter((item) => item.scope === scope && item.category === category)
+        .slice(0, maxPerCategory)
+        .map((item) => ({
+          ...item,
+          short_summary: item.title,
+          extended_summary: item.text || item.title,
+          importance: 0,
+        }));
+
+      categoryArticles.push(...rawFallback);
     }
 
     if (categoryArticles.length === 0) {

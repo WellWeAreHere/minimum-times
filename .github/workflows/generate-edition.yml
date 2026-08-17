@@ -21,4 +21,21 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
-      - run: node scripts/generate-edition.mjs
+      - name: Generate edition with retries
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5; do
+            echo "Edition generation attempt $attempt/5"
+            if node scripts/generate-edition.mjs; then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              delay=$((attempt * 30))
+              echo "Attempt failed; retrying in ${delay}s"
+              sleep "$delay"
+            fi
+          done
+
+          echo "Edition generation failed after 5 attempts"
+          exit 1
