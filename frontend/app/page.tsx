@@ -38,10 +38,11 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
 
     async function loadEdition() {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
       try {
         const response = await fetch("/api/edition/today", {
           signal: controller.signal,
@@ -64,9 +65,10 @@ export default function Home() {
     }
 
     loadEdition();
+    const refresh = setInterval(loadEdition, 5 * 60 * 1000);
     return () => {
       cancelled = true;
-      controller.abort();
+      clearInterval(refresh);
     };
   }, []);
 

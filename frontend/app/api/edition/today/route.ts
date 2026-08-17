@@ -13,9 +13,8 @@ export async function GET() {
     );
   }
 
-  const date = new Date().toISOString().slice(0, 10);
   const response = await fetch(
-    `${supabaseUrl}/rest/v1/editions?edition_date=eq.${date}&status=eq.published&select=payload&limit=1`,
+    `${supabaseUrl}/rest/v1/editions?status=eq.published&select=payload&order=edition_date.desc&limit=1`,
     {
       headers: {
         apikey: serviceKey,

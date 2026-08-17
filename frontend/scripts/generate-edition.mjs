@@ -154,9 +154,20 @@ async function saveEdition(date, payload) {
 }
 
 const today = new Date().toISOString().slice(0, 10);
-const feedResults = await Promise.allSettled(
-  scopes.flatMap((scope) => categories.map((category) => fetchFeed(scope, category, feeds[scope][category])))
+const feedTasks = scopes.flatMap((scope) =>
+  categories.map((category) => ({
+    scope,
+    category,
+    promise: fetchFeed(scope, category, feeds[scope][category]),
+  }))
 );
+const feedResults = await Promise.allSettled(feedTasks.map((task) => task.promise));
+feedResults.forEach((result, index) => {
+  if (result.status === "rejected") {
+    const task = feedTasks[index];
+    console.warn(`Feed unavailable for ${task.scope}/${task.category}: ${result.reason?.message || result.reason}`);
+  }
+});
 const articles = deduplicate(feedResults.flatMap((result) => result.status === "fulfilled" ? result.value : []));
 const selected = [];
 const reviewed = [];
@@ -219,7 +230,7 @@ for (const scope of scopes) {
     }
 
     if (categoryArticles.length === 0) {
-      throw new Error(`No articles available for ${scope}/${category}; edition was not published`);
+      console.warn(`No articles available for ${scope}/${category}; publishing that category empty`);
     }
 
     payload[scope][category] = categoryArticles;
