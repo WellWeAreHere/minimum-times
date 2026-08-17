@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 type Article = {
   title: string;
+  microSummary: string;
   url: string;
   published: string;
   category: string;
@@ -29,6 +30,7 @@ export default function Home() {
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [darkMode, setDarkMode] = useState(true);
   const [selectedScope, setSelectedScope] = useState("national");
+  const [extremeMode, setExtremeMode] = useState(false);
 
   function openArticle(article: Article) {
     setSelectedArticle((selected) =>
@@ -115,6 +117,21 @@ export default function Home() {
             >
               {darkMode ? "LIGHT MODE" : "DARK MODE"}
             </button>
+            <button
+              type="button"
+              onClick={() => setExtremeMode((value) => !value)}
+              className={`shrink-0 border px-3 py-2 text-xs font-semibold ${
+                extremeMode
+                  ? darkMode
+                    ? "border-white bg-white text-black"
+                    : "border-black bg-black text-white"
+                  : darkMode
+                    ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              {extremeMode ? "NORMAL MODE" : "EXTREME MODE"}
+            </button>
           </div>
         </header>
 
@@ -179,7 +196,9 @@ export default function Home() {
                               : "border-gray-200 hover:bg-gray-50"
                           }`}
                         >
-                          <div className="text-lg leading-snug">{article.title}</div>
+                          <div className="text-lg leading-snug">
+                            {extremeMode ? article.microSummary : article.title}
+                          </div>
                           <div className="text-xs text-gray-500 mt-2">
                             {article.published}
                           </div>

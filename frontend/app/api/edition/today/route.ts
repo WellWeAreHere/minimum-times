@@ -48,6 +48,7 @@ export async function GET() {
       for (const article of payload[scope]?.[category] || []) {
         articles.push({
           title: article.short_summary,
+          microSummary: article.micro_summary || article.short_summary,
           details: article.extended_summary,
           url: article.url,
           published: article.published,
