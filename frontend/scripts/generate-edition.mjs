@@ -110,7 +110,9 @@ HEADLINES:\n\n${items.map((item, index) => `INDEX: ${index}\nHEADLINE: ${item.ti
 }
 
 async function reviewWithNemotron(items) {
-  const prompt = `You are the final news editor. Evaluate every article. Keep only meaningful, important events that actually happened. Remove opinion, promotion, and minor updates. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. Mark at least the single most important article as keep=true when articles are supplied. Never keep an article only because it is a headline. Return ONLY valid JSON.
+  const scope = items[0]?.scope;
+  const category = items[0]?.category;
+  const prompt = `You are the final news editor for the ${scope}/${category} section. Evaluate every article. Keep only meaningful, important events that actually happened AND clearly belong to the requested scope and category. If an article is about a different category or scope, mark keep=false. Remove opinion, promotion, minor updates, and duplicates. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. Mark at least the single most important article as keep=true only when a supplied article genuinely belongs in this section. Never keep an article only because it is a headline. Return ONLY valid JSON.
 
 For each item return one decision with this shape:
 {"index":0,"keep":true,"importance":95,"short_summary":"maximum 30 words","extended_summary":"100-150 factual words"}
@@ -157,7 +159,6 @@ feedResults.forEach((result, index) => {
 });
 const articles = feedResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 const selected = [];
-const reviewed = [];
 
 for (const scope of scopes) {
   for (const category of categories) {
@@ -193,7 +194,6 @@ for (const scope of scopes) {
           extended_summary: decision.extended_summary || item.text.slice(0, 1000),
           importance: Number(decision.importance) || 0,
         };
-        reviewed.push(reviewedArticle);
         if (decision.keep) selected.push(reviewedArticle);
       }
     }
@@ -209,31 +209,7 @@ for (const scope of scopes) {
       .slice(0, maxPerCategory);
 
     if (categoryArticles.length === 0) {
-      const fallback = reviewed
-        .filter((item) => item.scope === scope && item.category === category)
-        .sort((a, b) => b.importance - a.importance)[0];
-
-      if (fallback) {
-        categoryArticles.push(fallback);
-      }
-    }
-
-    if (categoryArticles.length === 0) {
-      const rawFallback = articles
-        .filter((item) => item.scope === scope && item.category === category)
-        .slice(0, maxPerCategory)
-        .map((item) => ({
-          ...item,
-          short_summary: item.title,
-          extended_summary: item.text || item.title,
-          importance: 0,
-        }));
-
-      categoryArticles.push(...rawFallback);
-    }
-
-    if (categoryArticles.length === 0) {
-      console.warn(`No articles available for ${scope}/${category}; publishing that category empty`);
+      console.warn(`No major, correctly categorized articles for ${scope}/${category}; publishing that category empty`);
     }
 
     payload[scope][category] = categoryArticles;
