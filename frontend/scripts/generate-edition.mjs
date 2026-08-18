@@ -7,7 +7,7 @@ const categories = ["politics", "sports", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
 const batchSize = 3;
-const dedupeBatchSize = 25;
+const dedupeBatchSize = 10;
 const feedAttempts = 3;
 const categoryGuidance = {
   politics: "government, elections, courts, public policy, diplomacy, or major political developments. Require a concrete decision, ruling, law, policy, official action, election result, or consequential development; discard reactions without a substantive development.",
@@ -164,7 +164,10 @@ async function deduplicateWithNemotron(items) {
 For every item return one decision with this shape:
 {"index":0,"keep":true}
 
-HEADLINES:\n\n${items.map((item, index) => `INDEX: ${index}\nHEADLINE: ${item.title}\nURL: ${item.url}`).join("\n\n")}`;
+ARTICLES:\n\n${items.map((item, index) => {
+    const summary = item.extended_summary || item.short_summary || item.text || "";
+    return `INDEX: ${index}\nHEADLINE: ${item.title}\nSUMMARY: ${summary}\nURL: ${item.url}`;
+  }).join("\n\n")}`;
 
   return askNemotron(prompt, 2000);
 }
