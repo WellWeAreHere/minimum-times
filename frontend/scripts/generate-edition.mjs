@@ -6,14 +6,14 @@ const parser = new Parser();
 const categories = ["politics", "sports", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
-const batchSize = 5;
+const batchSize = 3;
 const dedupeBatchSize = 25;
 const feedAttempts = 3;
 const categoryGuidance = {
-  politics: "government, elections, courts, public policy, diplomacy, or major political developments",
-  sports: "sporting competitions, teams, athletes, scores, transfers, or governing bodies",
-  entertainment: "film, television, music, theatre, books, or notable entertainment-industry developments",
-  tragedies: "significant deaths, disasters, crashes, fires, explosions, floods, earthquakes, wars, or emergencies",
+  politics: "government, elections, courts, public policy, diplomacy, or major political developments. Require a concrete decision, ruling, law, policy, official action, election result, or consequential development; discard reactions without a substantive development.",
+  sports: "sporting competitions, teams, athletes, scores, transfers, or governing bodies. If the story concerns a game, the summaries MUST include the exact score or current scoreboard when it appears in the text, including both teams' scores and match status; never use vague wording when a score is available.",
+  entertainment: "film, television, music, theatre, books, or notable entertainment-industry developments. Keep verified releases, cancellations, premieres, earnings, awards, casting, or official announcements; discard promotional claims, predictions, rumours, and vague box-office wording.",
+  tragedies: "significant deaths, disasters, crashes, fires, explosions, floods, earthquakes, wars, or emergencies. State the event, location, scale, and confirmed deaths, injuries, displacement, affected population, damage, or official response; merge repetitive updates about the same event.",
 };
 
 const feeds = {
@@ -355,11 +355,20 @@ for (const scope of scopes) {
       .sort((a, b) => b.importance - a.importance)
       .slice(0, maxPerCategory);
 
-    if (categoryArticles.length === 0) {
+    let finalArticles = categoryArticles;
+    if (categoryArticles.length > 1) {
+      try {
+        finalArticles = await hierarchicalDeduplicate(categoryArticles);
+      } catch (error) {
+        console.warn(`Final deduplication failed for ${scope}/${category}: ${error.message}`);
+      }
+    }
+
+    if (finalArticles.length === 0) {
       console.warn(`No major, correctly categorized articles for ${scope}/${category}; publishing that category empty`);
     }
 
-    payload[scope][category] = categoryArticles;
+    payload[scope][category] = finalArticles;
   }
 }
 
