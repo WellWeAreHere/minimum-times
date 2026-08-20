@@ -275,7 +275,7 @@ async function filterAndSummarize(
         },
 
         body: JSON.stringify({
-          model: "nvidia/nemotron-3-super-120b-a12b",
+          model: "nvidia/nemotron-3-ultra-550b-a55b",
 
           temperature: 1,
           top_p: 0.95,

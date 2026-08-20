@@ -141,7 +141,7 @@ async function askNemotron(prompt, maxTokens) {
       Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
     },
     body: JSON.stringify({
-      model: "nvidia/nemotron-3-super-120b-a12b",
+      model: "nvidia/nemotron-3-ultra-550b-a55b",
       temperature: 1,
       top_p: 0.95,
       max_tokens: maxTokens,
