@@ -15,6 +15,8 @@ type Article = {
 const sections = [
   { key: "politics", label: "POLITICS" },
   { key: "sports", label: "SPORTS" },
+  { key: "business", label: "BUSINESS" },
+  { key: "science", label: "SCIENCE & TECHNOLOGY" },
   { key: "entertainment", label: "ENTERTAINMENT" },
   { key: "tragedies", label: "TRAGEDIES" },
 ];
@@ -31,11 +33,25 @@ export default function Home() {
   const [darkMode, setDarkMode] = useState(true);
   const [selectedScope, setSelectedScope] = useState("national");
   const [extremeMode, setExtremeMode] = useState(false);
+  const [visibleCategories, setVisibleCategories] = useState(
+    sections.map((section) => section.key)
+  );
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [editionDate, setEditionDate] = useState("");
 
   function openArticle(article: Article) {
     setSelectedArticle((selected) =>
       selected?.url === article.url ? null : article
     );
+  }
+
+  function toggleCategory(category: string) {
+    setVisibleCategories((current) =>
+      current.includes(category)
+        ? current.filter((item) => item !== category)
+        : [...current, category]
+    );
+    setSelectedArticle(null);
   }
 
   useEffect(() => {
@@ -46,7 +62,10 @@ export default function Home() {
       const timeout = setTimeout(() => controller.abort(), 15000);
 
       try {
-        const response = await fetch("/api/edition/today", {
+        const endpoint = editionDate
+          ? `/api/edition/today?date=${encodeURIComponent(editionDate)}`
+          : "/api/edition/today";
+        const response = await fetch(endpoint, {
           signal: controller.signal,
         });
         const data = await response.json();
@@ -54,7 +73,10 @@ export default function Home() {
         if (!response.ok) throw new Error(data.error || "Edition unavailable");
         if (!Array.isArray(data)) throw new Error("Edition has an invalid format");
 
-        if (!cancelled) setNews(data);
+        if (!cancelled) {
+          setNews(data);
+          setError("");
+        }
       } catch (err) {
         if (!cancelled) {
           setError(
@@ -72,7 +94,7 @@ export default function Home() {
       cancelled = true;
       clearInterval(refresh);
     };
-  }, []);
+  }, [editionDate]);
 
   const theme = darkMode
     ? "bg-black text-white"
@@ -166,13 +188,116 @@ export default function Home() {
           })}
         </div>
 
+        <div className="flex flex-wrap items-center gap-3 mb-10">
+          <label htmlFor="edition-date" className="text-sm font-semibold">
+            EDITION DATE
+          </label>
+          <input
+            id="edition-date"
+            type="date"
+            value={editionDate}
+            onChange={(event) => {
+              setEditionDate(event.target.value);
+              setSelectedArticle(null);
+              setNews(null);
+            }}
+            className={`border px-3 py-2 text-sm ${
+              darkMode
+                ? "border-gray-700 bg-black text-white"
+                : "border-gray-300 bg-white text-black"
+            }`}
+          />
+          {editionDate && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditionDate("");
+                setSelectedArticle(null);
+                setNews(null);
+              }}
+              className={`border px-3 py-2 text-xs font-semibold ${
+                darkMode
+                  ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                  : "border-gray-300 text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              LATEST EDITION
+            </button>
+          )}
+
+          <div className="relative ml-auto">
+            <button
+              type="button"
+              onClick={() => setCategoriesOpen((value) => !value)}
+              aria-expanded={categoriesOpen}
+              aria-controls="category-menu"
+              className={`border px-3 py-2 text-xs font-semibold ${
+                darkMode
+                  ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                  : "border-gray-300 text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              CATEGORIES {categoriesOpen ? "▲" : "▼"}
+            </button>
+
+            {categoriesOpen && (
+              <div
+                id="category-menu"
+                className={`absolute right-0 z-10 mt-2 w-72 border p-4 shadow-lg ${
+                  darkMode
+                    ? "border-gray-700 bg-black"
+                    : "border-gray-300 bg-white"
+                }`}
+              >
+                <p className="mb-3 text-xs font-semibold text-gray-500">
+                  VISIBLE CATEGORIES
+                </p>
+                <div className="space-y-3">
+                  {sections.map((section) => (
+                    <label
+                      key={section.key}
+                      className="flex items-center gap-3 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={visibleCategories.includes(section.key)}
+                        onChange={() => toggleCategory(section.key)}
+                      />
+                      {section.label}
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-4 flex gap-3 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCategories(sections.map((section) => section.key))}
+                    className="underline"
+                  >
+                    SELECT ALL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVisibleCategories([]);
+                      setSelectedArticle(null);
+                    }}
+                    className="underline"
+                  >
+                    CLEAR ALL
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
         {scopes.filter((scope) => scope.key === selectedScope).map((scope) => (
           <section key={scope.key} className="mb-14">
             <h2 className="text-2xl font-bold border-b border-gray-700 pb-3 mb-6">
               {scope.label}
             </h2>
 
-            {sections.map((section) => {
+            {sections.filter((section) => visibleCategories.includes(section.key)).map((section) => {
               const articles = news!.filter(
                 (article) =>
                   article.scope === scope.key && article.category === section.key
@@ -240,8 +365,39 @@ export default function Home() {
                 </div>
               );
             })}
+            {visibleCategories.length === 0 && (
+              <p className="py-4 text-gray-500">
+                Select at least one category to view the edition.
+              </p>
+            )}
           </section>
         ))}
+
+        <footer
+          className={`border-t pt-6 text-sm ${
+            darkMode ? "border-gray-800 text-gray-500" : "border-gray-200 text-gray-600"
+          }`}
+        >
+          <span>Ideas, features, or issues?</span>{" "}
+          <a
+            href="mailto:iamherebcozidontknow@gmail.com?subject=Idea%20for%20Minimum%20Times"
+            className="underline hover:text-current"
+          >
+            IDEA
+          </a>{" "}
+          <a
+            href="mailto:iamherebcozidontknow@gmail.com?subject=Feature%20request%20for%20Minimum%20Times"
+            className="underline hover:text-current"
+          >
+            FEATURE
+          </a>{" "}
+          <a
+            href="mailto:iamherebcozidontknow@gmail.com?subject=Issue%20with%20Minimum%20Times"
+            className="underline hover:text-current"
+          >
+            ISSUE
+          </a>
+        </footer>
       </div>
     </main>
   );

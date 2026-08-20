@@ -14,6 +14,12 @@ const FEEDS = {
   sports:
     "https://news.google.com/rss/search?q=India+(sports+OR+cricket+OR+football)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
 
+  business:
+    "https://news.google.com/rss/search?q=India+(business+OR+economy+OR+market+OR+company+OR+inflation+OR+budget)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+
+  science:
+    "https://news.google.com/rss/search?q=India+(science+OR+technology+OR+AI+OR+space+OR+cybersecurity)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+
   entertainment:
     "https://news.google.com/rss/search?q=India+(actor+OR+film+OR+music+OR+entertainment)+when:1d&hl=en-IN&gl=IN:en",
 
@@ -232,10 +238,10 @@ async function filterAndSummarize(
     "- Maximum 30 words.",
     "- Preserve important names, numbers, results and causes.",
     "- Never invent facts.",
-    "- Base the summary on the DETAILS text, not only the headline.",
+    "- Base the summary only on the DETAILS text.",
     "- Include concrete numbers, dates, names and results from DETAILS whenever they are available.",
     "- Also write an extended factual summary of 100-150 words for readers who click the headline.",
-    "- The extended summary must only use the headline and details provided below.",
+    "- The extended summary must only use the DETAILS text provided below.",
     "- Do not mention where the information came from, do not mention publisher, DO NOT put per source in end",
     "- GOOD : Thousands displaced , BAD : thousands displaced, per BBC", 
     "",
@@ -251,7 +257,6 @@ async function filterAndSummarize(
       (article, index) =>
         `INDEX: ${index}\n` +
         `CATEGORY: ${article.category}\n` +
-        `HEADLINE: ${article.title}\n` +
         `DETAILS: ${article.context.slice(0, 5000)}`
     ),
   ].join("\n\n");

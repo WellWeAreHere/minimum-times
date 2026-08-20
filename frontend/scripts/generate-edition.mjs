@@ -3,7 +3,7 @@ import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 
 const parser = new Parser();
-const categories = ["politics", "sports", "entertainment", "tragedies"];
+const categories = ["politics", "sports", "business", "science", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
 const batchSize = 3;
@@ -12,6 +12,8 @@ const feedAttempts = 3;
 const categoryGuidance = {
   politics: "government, elections, courts, public policy, diplomacy, or major political developments. Require a concrete decision, ruling, law, policy, official action, election result, or consequential development; discard reactions without a substantive development.",
   sports: "sporting competitions, teams, athletes, scores, transfers, or governing bodies. If the story concerns a game, the summaries MUST include the exact score or current scoreboard when it appears in the text, including both teams' scores and match status; never use vague wording when a score is available.",
+  business: "major companies, markets, jobs, inflation, budgets, trade, investment, or economic policy. Keep concrete decisions, results, filings, regulatory actions, major deals, or meaningful economic changes; discard market noise, predictions, promotions, and routine corporate announcements.",
+  science: "important science and technology developments, including research, space, cybersecurity, artificial intelligence, and major technology policy. Keep verified discoveries, launches, breaches, regulations, or consequential technical developments; discard product promotion, speculation, and minor updates.",
   entertainment: "film, television, music, theatre, books, or notable entertainment-industry developments. Keep verified releases, cancellations, premieres, earnings, awards, casting, or official announcements; discard promotional claims, predictions, rumours, and vague box-office wording.",
   tragedies: "significant deaths, disasters, crashes, fires, explosions, floods, earthquakes, wars, or emergencies. State the event, location, scale, and confirmed deaths, injuries, displacement, affected population, damage, or official response; merge repetitive updates about the same event.",
 };
@@ -20,12 +22,16 @@ const feeds = {
   national: {
     politics: "https://news.google.com/rss/search?q=India+(government+OR+parliament+OR+election+OR+minister+OR+court)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
     sports: "https://news.google.com/rss/search?q=India+(sports+OR+cricket+OR+football)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    business: "https://news.google.com/rss/search?q=India+(business+OR+economy+OR+market+OR+company+OR+inflation+OR+budget)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    science: "https://news.google.com/rss/search?q=India+(science+OR+technology+OR+AI+OR+space+OR+cybersecurity)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
     entertainment: "https://news.google.com/rss/search?q=India+(actor+OR+film+OR+music+OR+entertainment)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
     tragedies: "https://news.google.com/rss/search?q=India+(earthquake+OR+accident+OR+fire+OR+explosion+OR+flood+OR+crash)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
   },
   international: {
     politics: "https://news.google.com/rss/search?q=(government+OR+parliament+OR+election+OR+president+OR+court)+-India+when:1d&hl=en&gl=US&ceid=US:en",
     sports: "https://news.google.com/rss/search?q=(sports+OR+football+OR+tennis+OR+Olympics)+-India+when:1d&hl=en&gl=US&ceid=US:en",
+    business: "https://news.google.com/rss/search?q=(business+OR+economy+OR+market+OR+company+OR+inflation)+-India+when:1d&hl=en&gl=US&ceid=US:en",
+    science: "https://news.google.com/rss/search?q=(science+OR+technology+OR+AI+OR+space+OR+cybersecurity)+-India+when:1d&hl=en&gl=US&ceid=US:en",
     entertainment: "https://news.google.com/rss/search?q=(actor+OR+film+OR+music+OR+entertainment)+-India+when:1d&hl=en&gl=US&ceid=US:en",
     tragedies: "https://news.google.com/rss/search?q=(earthquake+OR+accident+OR+fire+OR+explosion+OR+flood+OR+crash)+-India+when:1d&hl=en&gl=US&ceid=US:en",
   },
@@ -217,7 +223,7 @@ async function reviewWithNemotron(items) {
 For each item return one decision with this shape:
 {"index":0,"keep":true,"importance":95,"short_summary":"maximum 30 words","micro_summary":"maximum 10 words, terse factual wording","extended_summary":"100-150 factual words"}
 
-ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}\nCATEGORY: ${item.category}\nHEADLINE: ${item.title}\nARTICLE TEXT: ${item.text}`).join("\n\n")}`;
+ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}\nCATEGORY: ${item.category}\nARTICLE TEXT: ${item.text}`).join("\n\n")}`;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const retryInstruction = attempt === 1
