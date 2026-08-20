@@ -1,6 +1,6 @@
 # TODO
 
-- [ ] Change the news pipeline to fetch articles, run keep/discard first, then deduplicate only the small approved set; remove the earlier AI deduplication pass.
+- [x] Change the news pipeline to fetch articles, run keep/discard first, then deduplicate only the small approved set; remove the earlier AI deduplication pass.
 - [ ] Diagnose NVIDIA request failures with detailed response logging and reduce unnecessary AI requests through local deduplication, smaller feed batches, and limited retries.
 - [x] Add an Ideas / Features / Issues contact option that opens an email to iamherebcozidontknow@gmail.com.
 - [x] Add date-based access to previous editions, allowing users to browse an edition by its date.

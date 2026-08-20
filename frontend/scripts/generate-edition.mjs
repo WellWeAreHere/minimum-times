@@ -138,7 +138,7 @@ async function loadPreviousEdition(date) {
   }
 }
 
-async function askNemotron(prompt, maxTokens) {
+async function askNemotron(prompt, maxTokens, responseType = "array") {
   const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
     method: "POST",
     signal: AbortSignal.timeout(55000),
@@ -161,6 +161,7 @@ async function askNemotron(prompt, maxTokens) {
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content;
   const parsed = JSON.parse(content.replace(/^```json\s*|\s*```$/g, ""));
+  if (responseType === "object") return parsed;
   return Array.isArray(parsed) ? parsed : parsed.decisions || [];
 }
 
@@ -218,30 +219,24 @@ async function reviewWithNemotron(items) {
   const scope = items[0]?.scope;
   const category = items[0]?.category;
   const scopeRule = scope === "international" ? "outside India" : "in India";
-  const prompt = `You are the final news editor for the ${scope}/${category} section. The category means ${categoryGuidance[category]}. The scope means the event must happen ${scopeRule}, or directly concern that scope. Evaluate every article. Keep only meaningful, important events that actually happened AND clearly belong to the requested scope and category. If an article is about a different category or scope, mark keep=false. Remove opinion, promotion, minor updates, and duplicates. Do not demand that a story be globally historic; a clearly consequential event for this section is sufficient. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. Mark at least the single most important article as keep=true only when a supplied article genuinely belongs in this section. Never keep an article only because it is a headline. Return exactly one decision for every supplied index, including discarded articles. Return ONLY valid JSON with no markdown.
+  const prompt = `You are the final news editor for the ${scope}/${category} section. The category means ${categoryGuidance[category]}. The scope means the event must happen ${scopeRule}, or directly concern that scope. Evaluate every article. Keep only meaningful, important events that actually happened AND clearly belong to the requested scope and category. If an article is about a different category or scope, mark keep=false. Remove opinion, promotion, and minor updates. Do not demand that a story be globally historic; a clearly consequential event for this section is sufficient. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. Mark at least the single most important article as keep=true only when a supplied article genuinely belongs in this section. Never keep an article only because it is a headline. Return exactly one decision for every supplied index, including discarded articles. Return ONLY valid JSON with no markdown.
 
 For each item return one decision with this shape:
-{"index":0,"keep":true,"importance":95,"short_summary":"maximum 30 words","micro_summary":"maximum 10 words, terse factual wording","extended_summary":"100-150 factual words"}
+{"index":0,"keep":true,"importance":95}
 
 ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}\nCATEGORY: ${item.category}\nARTICLE TEXT: ${item.text}`).join("\n\n")}`;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const retryInstruction = attempt === 1
       ? ""
-      : "\nYour previous response did not match the required schema. Retry and return every decision with all six exact fields: index, keep, importance, short_summary, micro_summary, extended_summary.";
+      : "\nYour previous response did not match the required schema. Retry and return every decision with exactly these fields: index, keep, importance.";
     const decisions = await askNemotron(`${prompt}${retryInstruction}`, 4000);
     const validDecisions = decisions.filter((decision) =>
       Number.isInteger(decision.index) &&
       decision.index >= 0 &&
       decision.index < items.length &&
       typeof decision.keep === "boolean" &&
-      Number.isFinite(Number(decision.importance)) &&
-      typeof decision.short_summary === "string" &&
-      decision.short_summary.trim() &&
-      typeof decision.micro_summary === "string" &&
-      decision.micro_summary.trim() &&
-      typeof decision.extended_summary === "string" &&
-      decision.extended_summary.trim()
+      Number.isFinite(Number(decision.importance))
     );
     const uniqueDecisions = [...new Map(validDecisions.map((decision) => [decision.index, decision])).values()];
     if (uniqueDecisions.length === items.length) return uniqueDecisions;
@@ -250,6 +245,30 @@ ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}
   }
 
   return [];
+}
+
+async function summarizeArticleWithNemotron(article) {
+  const prompt = `You are a concise news editor. Summarize the supplied article text only. Do not use outside knowledge and do not invent facts. Preserve important names, dates, numbers, scores, causes, and consequences.
+
+Return ONLY valid JSON with this exact structure:
+{"short_summary":"maximum 30 words","micro_summary":"maximum 10 words, terse factual wording","extended_summary":"100-150 factual words"}
+
+CATEGORY: ${article.category}
+ARTICLE TEXT:
+${article.text}`;
+
+  const summary = await askNemotron(prompt, 1200, "object");
+
+  if (
+    !summary ||
+    typeof summary.short_summary !== "string" ||
+    typeof summary.micro_summary !== "string" ||
+    typeof summary.extended_summary !== "string"
+  ) {
+    throw new Error("Nemotron returned an invalid article summary");
+  }
+
+  return summary;
 }
 
 async function saveEdition(date, payload) {
@@ -308,20 +327,13 @@ for (const scope of scopes) {
       continue;
     }
 
-    let headlineArticles;
-    try {
-      headlineArticles = await hierarchicalDeduplicate(categoryArticles);
-    } catch (error) {
-      console.warn(`Deduplication failed for ${scope}/${category}: ${error.message}`);
-      headlineArticles = categoryArticles;
-    }
-
     const reviewArticles = await Promise.all(
-      headlineArticles.map(async (item) => ({
+      categoryArticles.map(async (item) => ({
         ...item,
         text: await articleText(item.url, item.text),
       }))
     );
+    const keptArticles = [];
     let keptCount = 0;
     let reviewBatchCount = 0;
     let validDecisionCount = 0;
@@ -334,23 +346,49 @@ for (const scope of scopes) {
         validDecisionCount += decisions.length;
         for (const decision of decisions) {
           const item = batch[decision.index];
-          if (!item || !decision.short_summary) continue;
+          if (!item) continue;
           const reviewedArticle = {
             ...item,
-            short_summary: limitWords(decision.short_summary, 30),
-            micro_summary: limitWords(decision.micro_summary || decision.short_summary, 10),
-            extended_summary: decision.extended_summary || item.text.slice(0, 1000),
             importance: Number(decision.importance) || 0,
           };
           if (decision.keep) {
-            selected.push(reviewedArticle);
-            keptCount += 1;
+            keptArticles.push(reviewedArticle);
           }
         }
       }
     } catch (error) {
       console.warn(`Review failed for ${scope}/${category}: ${error.message}`);
     }
+
+    keptCount = keptArticles.length;
+    const candidates = keptArticles
+      .sort((a, b) => b.importance - a.importance)
+      .slice(0, maxPerCategory);
+    let deduplicatedArticles = candidates;
+
+    if (candidates.length > 1) {
+      try {
+        deduplicatedArticles = await hierarchicalDeduplicate(candidates);
+      } catch (error) {
+        console.warn(`Deduplication failed for ${scope}/${category}: ${error.message}`);
+      }
+    }
+
+    for (const article of deduplicatedArticles) {
+      try {
+        const summary = await summarizeArticleWithNemotron(article);
+        selected.push({
+          ...article,
+          short_summary: limitWords(summary.short_summary, 30),
+          micro_summary: limitWords(summary.micro_summary, 10),
+          extended_summary: limitWords(summary.extended_summary, 150),
+        });
+      } catch (error) {
+        console.warn(`Summary failed for ${scope}/${category}: ${error.message}`);
+      }
+    }
+
+    const headlineArticles = deduplicatedArticles;
 
     console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${previousMatches.length} similar to previous edition → ${categoryArticles.length} new → ${headlineArticles.length} deduplicated → ${reviewBatchCount} review batches (${validDecisionCount} valid decisions) → ${keptCount} kept`);
   }
@@ -364,20 +402,11 @@ for (const scope of scopes) {
       .sort((a, b) => b.importance - a.importance)
       .slice(0, maxPerCategory);
 
-    let finalArticles = categoryArticles;
-    if (categoryArticles.length > 1) {
-      try {
-        finalArticles = await hierarchicalDeduplicate(categoryArticles);
-      } catch (error) {
-        console.warn(`Final deduplication failed for ${scope}/${category}: ${error.message}`);
-      }
-    }
-
-    if (finalArticles.length === 0) {
+    if (categoryArticles.length === 0) {
       console.warn(`No major, correctly categorized articles for ${scope}/${category}; publishing that category empty`);
     }
 
-    payload[scope][category] = finalArticles;
+    payload[scope][category] = categoryArticles;
   }
 }
 

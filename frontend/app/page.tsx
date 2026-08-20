@@ -38,6 +38,8 @@ export default function Home() {
   );
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [editionDate, setEditionDate] = useState("");
+  const [dateInput, setDateInput] = useState("");
+  const [dateError, setDateError] = useState("");
 
   function openArticle(article: Article) {
     setSelectedArticle((selected) =>
@@ -195,23 +197,43 @@ export default function Home() {
           <input
             id="edition-date"
             type="date"
-            value={editionDate}
-            onChange={(event) => {
-              setEditionDate(event.target.value);
-              setSelectedArticle(null);
-              setNews(null);
-            }}
+            value={dateInput}
+            onChange={(event) => setDateInput(event.target.value)}
             className={`border px-3 py-2 text-sm ${
               darkMode
                 ? "border-gray-700 bg-black text-white"
                 : "border-gray-300 bg-white text-black"
             }`}
           />
+          <button
+            type="button"
+            onClick={() => {
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+                setDateError("Enter a complete edition date");
+                return;
+              }
+
+              setDateError("");
+              setEditionDate(dateInput);
+              setSelectedArticle(null);
+              setNews(null);
+            }}
+            className={`border px-3 py-2 text-xs font-semibold ${
+              darkMode
+                ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                : "border-gray-300 text-gray-700 hover:bg-gray-100"
+            }`}
+          >
+            LOAD EDITION
+          </button>
+          {dateError && <span className="text-xs text-red-400">{dateError}</span>}
           {editionDate && (
             <button
               type="button"
               onClick={() => {
                 setEditionDate("");
+                setDateInput("");
+                setDateError("");
                 setSelectedArticle(null);
                 setNews(null);
               }}
