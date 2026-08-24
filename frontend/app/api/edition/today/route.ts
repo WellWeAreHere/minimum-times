@@ -22,8 +22,8 @@ export async function GET(request: Request) {
   }
 
   const query = requestedDate
-    ? `status=eq.published&edition_date=eq.${requestedDate}&select=payload&limit=1`
-    : "status=eq.published&select=payload&order=edition_date.desc&limit=1";
+    ? `status=eq.published&edition_date=eq.${requestedDate}&select=edition_date,payload&limit=1`
+    : "status=eq.published&select=edition_date,payload&order=edition_date.desc&limit=1";
 
   const response = await fetch(
     `${supabaseUrl}/rest/v1/editions?${query}`,
@@ -75,5 +75,8 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json(events);
+  return NextResponse.json({
+    editionDate: rows[0].edition_date,
+    events,
+  });
 }

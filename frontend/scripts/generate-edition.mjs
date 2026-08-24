@@ -7,7 +7,9 @@ const categories = ["politics", "sports", "business", "science", "entertainment"
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
 const batchSize = 3;
-const feedAttempts = 3;
+const feedAttempts = 2;
+const MIN_FULL_TEXT_LENGTH = 300;
+const extractionMetrics = { full: 0, fallback: 0 };
 const categoryGuidance = {
   politics: "government, elections, courts, public policy, diplomacy, or major political developments. Require a concrete decision, ruling, law, policy, official action, election result, or consequential development; discard reactions without a substantive development.",
   sports: "sporting competitions, teams, athletes, scores, transfers, or governing bodies. If the story concerns a game, the summaries MUST include the exact score or current scoreboard when it appears in the text, including both teams' scores and match status; never use vague wording when a score is available.",
@@ -70,6 +72,20 @@ function sameStory(left, right) {
   return overlap >= 5 && overlap / Math.min(leftWords.size, rightWords.size) >= 0.75;
 }
 
+function deduplicateLocally(items) {
+  const unique = [];
+  const duplicates = [];
+  for (const item of items) {
+    const existing = unique.find((candidate) => sameStory(candidate, item));
+    if (existing) {
+      duplicates.push({ duplicate: item, kept: existing });
+    } else {
+      unique.push(item);
+    }
+  }
+  return { unique, duplicates };
+}
+
 function limitWords(value, maxWords) {
   return String(value || "").trim().split(/\s+/).filter(Boolean).slice(0, maxWords).join(" ");
 }
@@ -84,13 +100,15 @@ async function articleText(url, fallback) {
       signal: AbortSignal.timeout(7000),
       headers: { "User-Agent": "Mozilla/5.0 Minimum Times/1.0" },
     });
-    if (!response.ok) return fallback;
+    if (!response.ok) return { text: fallback, status: "fallback" };
     const html = await response.text();
     const document = new JSDOM(html, { url: response.url || url }).window.document;
     const parsed = new Readability(document).parse();
-    return parsed?.textContent?.replace(/\s+/g, " ").trim().slice(0, 6000) || fallback;
+    const text = parsed?.textContent?.replace(/\s+/g, " ").trim().slice(0, 6000) || "";
+    if (text.length < MIN_FULL_TEXT_LENGTH) return { text: fallback, status: "fallback" };
+    return { text, status: "full" };
   } catch {
-    return fallback;
+    return { text: fallback, status: "fallback" };
   }
 }
 
@@ -162,28 +180,69 @@ async function loadPreviousEdition(date) {
 }
 
 async function askNemotron(prompt, maxTokens, responseType = "array") {
-  const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-    method: "POST",
-    signal: AbortSignal.timeout(55000),
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "nvidia/nemotron-3-ultra-550b-a55b",
-      temperature: 1,
-      top_p: 0.95,
-      max_tokens: maxTokens,
-      reasoning_effort: "none",
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      signal: AbortSignal.timeout(55000),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "nvidia/nemotron-3-ultra-550b-a55b",
+        temperature: 1,
+        top_p: 0.95,
+        max_tokens: maxTokens,
+        reasoning_effort: "none",
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+  } catch (error) {
+    logPipeline("nvidia_request_failed", {
+      duration_ms: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 
-  if (!response.ok) throw new Error(`NVIDIA request failed (${response.status})`);
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 1000);
+    logPipeline("nvidia_request_failed", {
+      status: response.status,
+      duration_ms: Date.now() - startedAt,
+      response_preview: body,
+    });
+    throw new Error(`NVIDIA request failed (${response.status})`);
+  }
+
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content;
-  const parsed = JSON.parse(content.replace(/^```json\s*|\s*```$/g, ""));
+  if (typeof content !== "string" || !content.trim()) {
+    logPipeline("nvidia_invalid_response", {
+      duration_ms: Date.now() - startedAt,
+      response_keys: Object.keys(data || {}),
+    });
+    throw new Error("NVIDIA response did not contain message content");
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(content.replace(/^```json\s*|\s*```$/g, ""));
+  } catch (error) {
+    logPipeline("nvidia_invalid_json", {
+      duration_ms: Date.now() - startedAt,
+      response_preview: content.slice(0, 1000),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+  logPipeline("nvidia_request_succeeded", {
+    duration_ms: Date.now() - startedAt,
+    response_type: responseType,
+  });
   if (responseType === "object") return parsed;
   return Array.isArray(parsed) ? parsed : parsed.decisions || [];
 }
@@ -271,6 +330,11 @@ REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${it
     throw new Error("Nemotron returned an invalid event summary");
   }
   const facts = Object.fromEntries(Object.entries(summary.facts).filter(([key, value]) => typeof key === "string" && typeof value === "string"));
+  if (items[0].category === "sports") {
+    for (const key of ["sport", "match", "teams", "result", "score", "top_performer", "key_event"]) {
+      if (!(key in facts)) facts[key] = "";
+    }
+  }
   return {
     facts,
     summary: limitWords(summary.summary, 30),
@@ -335,11 +399,27 @@ for (const scope of scopes) {
       continue;
     }
 
+    const locallyDeduplicated = deduplicateLocally(categoryArticles);
+    locallyDeduplicated.duplicates.forEach(({ duplicate, kept }) => {
+      logPipeline("local_duplicate_removed", {
+        scope,
+        category,
+        duplicate_title: duplicate.title,
+        duplicate_url: duplicate.url,
+        kept_title: kept.title,
+        kept_url: kept.url,
+      });
+    });
     const reviewArticles = await Promise.all(
-      categoryArticles.map(async (item) => ({
-        ...item,
-        text: await articleText(item.url, item.text),
-      }))
+      locallyDeduplicated.unique.map(async (item) => {
+        const extracted = await articleText(item.url, item.text);
+        extractionMetrics[extracted.status] += 1;
+        return {
+          ...item,
+          text: extracted.text,
+          extractionStatus: extracted.status,
+        };
+      })
     );
     reviewArticles.forEach((item) => {
       logPipeline("story_content_ready", {
@@ -348,6 +428,7 @@ for (const scope of scopes) {
         title: item.title,
         url: item.url,
         content_length: item.text.length,
+        extraction_status: item.extractionStatus,
       });
     });
     const keptArticles = [];
@@ -449,4 +530,9 @@ for (const scope of scopes) {
 }
 
 await saveEdition(today, payload);
+logPipeline("extraction_summary", {
+  full_extractions: extractionMetrics.full,
+  fallback_extractions: extractionMetrics.fallback,
+  total_stories_processed: extractionMetrics.full + extractionMetrics.fallback,
+});
 console.log(`Published ${today} with ${selected.length} events.`);

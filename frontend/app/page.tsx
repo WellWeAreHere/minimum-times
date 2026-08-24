@@ -17,6 +17,15 @@ const scopes = [
   { key: "international", label: "INTERNATIONAL" },
 ];
 
+function formatEditionDate(value: string) {
+  const date = new Date(`${value}T00:00:00Z`);
+  const weekday = new Intl.DateTimeFormat("en-IN", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(date);
+  return `${weekday}, ${date.getUTCDate()}/${date.getUTCMonth() + 1}/${date.getUTCFullYear()}`;
+}
+
 export default function Home() {
   const [news, setNews] = useState<NewsEvent[] | null>(null);
   const [error, setError] = useState("");
@@ -29,6 +38,7 @@ export default function Home() {
   );
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [editionDate, setEditionDate] = useState("");
+  const [loadedEditionDate, setLoadedEditionDate] = useState("");
   const [dateInput, setDateInput] = useState("");
   const [dateError, setDateError] = useState("");
 
@@ -64,10 +74,13 @@ export default function Home() {
         const data = await response.json();
 
         if (!response.ok) throw new Error(data.error || "Edition unavailable");
-        if (!Array.isArray(data)) throw new Error("Edition has an invalid format");
+        if (!data || !Array.isArray(data.events) || typeof data.editionDate !== "string") {
+          throw new Error("Edition has an invalid format");
+        }
 
         if (!cancelled) {
-          setNews(data);
+          setNews(data.events);
+          setLoadedEditionDate(data.editionDate);
           setError("");
         }
       } catch (err) {
@@ -121,6 +134,11 @@ export default function Home() {
             <p className={`${darkMode ? "text-gray-400" : "text-gray-600"} mt-2`}>
               The minimum news you need.
             </p>
+            {loadedEditionDate && (
+              <p className={`${darkMode ? "text-gray-500" : "text-gray-500"} mt-2 text-xs uppercase tracking-wide`}>
+                {formatEditionDate(loadedEditionDate)}
+              </p>
+            )}
             <div className="flex shrink-0 gap-2">
               <button
                 type="button"
