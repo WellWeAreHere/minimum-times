@@ -6,6 +6,10 @@
 - [x] Major architectural change - migrate from `Article` to `Event` as the fundamental data structure: redesign ingestion, AI review/summarization, deduplication, persistence, APIs, and UI rendering around events that aggregate duplicate articles into one item with `category`, `importance`, `sources[]`, structured `facts`, `timestamp`, and `summary`.
 - [x] Add the current edition date and weekday below "The minimum news you need."
 - [x] Add final extraction metrics to the generator log: report how many articles were extracted in full and how many used fallback content.
+- [x] Remove arbitrary AI-generated fact metadata blocks from event details, especially corporate/international fields such as action, company, subsidiary location, tool, target, and officer role; do not display these as standalone UI fields.
+- [x] Do not send RSS fallback snippets to the AI: only fully extracted article content may enter review, clustering, or summarization; log and skip stories whose full text cannot be extracted.
+- [x] Do not reject valid short articles using a fixed word-count threshold: classify extraction as `full_extraction`, `short_but_valid`, `blocked`, `empty`, or `rss_only`; allow full and short-valid content into AI processing, and skip only blocked, empty, boilerplate, or RSS-only content.
+- [x] Rebuild source ingestion: decode Google News wrapper URLs; fetch resolved publisher URLs with redirects; extract from JSON-LD, `<article>`, Readability, and public RSS/API/document content; validate real text; log extraction failures and skip stories without usable content; add direct feeds for PIB, ministries, RBI, courts, ECI, and official reports; use Reuters/AP only when their public feed or article body is accessible.
 - [x] Add an Ideas / Features / Issues contact option that opens an email to iamherebcozidontknow@gmail.com.
 - [x] Add date-based access to previous editions, allowing users to browse an edition by its date.
 - [x] Add a client-side CATEGORIES menu beside the scope tabs, with accessible checkbox toggles, all categories selected by default, and Select all/Clear all actions.

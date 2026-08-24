@@ -1,15 +1,27 @@
 import Parser from "rss-parser";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const { GoogleDecoder } = require("google-news-url-decoder");
 
 const parser = new Parser();
+const googleDecoder = new GoogleDecoder();
 const categories = ["politics", "sports", "business", "science", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
 const batchSize = 3;
 const feedAttempts = 2;
-const MIN_FULL_TEXT_LENGTH = 300;
-const extractionMetrics = { full: 0, fallback: 0 };
+const MIN_SHORT_VALID_WORDS = 40;
+const MIN_FULL_EXTRACTION_WORDS = 120;
+const extractionMetrics = {
+  full_extraction: 0,
+  short_but_valid: 0,
+  blocked: 0,
+  empty: 0,
+  rss_only: 0,
+};
 const categoryGuidance = {
   politics: "government, elections, courts, public policy, diplomacy, or major political developments. Require a concrete decision, ruling, law, policy, official action, election result, or consequential development; discard reactions without a substantive development.",
   sports: "sporting competitions, teams, athletes, scores, transfers, or governing bodies. If the story concerns a game, the summaries MUST include the exact score or current scoreboard when it appears in the text, including both teams' scores and match status; never use vague wording when a score is available.",
@@ -37,6 +49,23 @@ const feeds = {
     tragedies: "https://news.google.com/rss/search?q=(earthquake+OR+accident+OR+fire+OR+explosion+OR+flood+OR+crash)+-India+when:1d&hl=en&gl=US&ceid=US:en",
   },
 };
+
+const directFeeds = [
+  {
+    scope: "national",
+    category: "politics",
+    sourceName: "PIB India",
+    sourceTier: "primary",
+    url: "https://pib.gov.in/RssMain.aspx",
+  },
+  {
+    scope: "national",
+    category: "business",
+    sourceName: "RBI",
+    sourceTier: "primary",
+    url: "https://www.rbi.org.in/pressreleases_rss.aspx",
+  },
+];
 
 const required = ["NVIDIA_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
 for (const name of required) {
@@ -94,25 +123,126 @@ function normalizeImportance(value) {
   return Math.max(1, Math.min(10, Math.round(Number(value) / 10) || 1));
 }
 
-async function articleText(url, fallback) {
+function isGoogleNewsUrl(url) {
   try {
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(7000),
-      headers: { "User-Agent": "Mozilla/5.0 Minimum Times/1.0" },
-    });
-    if (!response.ok) return { text: fallback, status: "fallback" };
-    const html = await response.text();
-    const document = new JSDOM(html, { url: response.url || url }).window.document;
-    const parsed = new Readability(document).parse();
-    const text = parsed?.textContent?.replace(/\s+/g, " ").trim().slice(0, 6000) || "";
-    if (text.length < MIN_FULL_TEXT_LENGTH) return { text: fallback, status: "fallback" };
-    return { text, status: "full" };
+    return new URL(url).hostname === "news.google.com";
   } catch {
-    return { text: fallback, status: "fallback" };
+    return false;
   }
 }
 
-async function fetchFeed(scope, category, url) {
+async function resolvePublisherUrl(url) {
+  if (!isGoogleNewsUrl(url)) return { url, status: "direct" };
+  try {
+    const result = await googleDecoder.decode(url);
+    if (result.status && result.decoded_url) {
+      logPipeline("google_url_resolved", { wrapper_url: url, publisher_url: result.decoded_url });
+      return { url: result.decoded_url, status: "resolved" };
+    }
+    logPipeline("google_url_resolution_failed", { wrapper_url: url, reason: result.message || "unknown" });
+  } catch (error) {
+    logPipeline("google_url_resolution_failed", {
+      wrapper_url: url,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return { url, status: "unresolved" };
+}
+
+function cleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 6000);
+}
+
+function isBlockedOrBoilerplate(text) {
+  const normalized = text.toLowerCase();
+  return [
+    "enable javascript",
+    "access denied",
+    "automated access",
+    "verify you are human",
+    "subscribe to continue",
+    "sign in to continue",
+    "page not found",
+    "robot check",
+  ].some((marker) => normalized.includes(marker));
+}
+
+function jsonLdArticleBodies(document) {
+  const bodies = [];
+  for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const parsed = JSON.parse(script.textContent || "");
+      const values = Array.isArray(parsed) ? parsed : [parsed];
+      for (const value of values) {
+        if (value?.articleBody) bodies.push(value.articleBody);
+        if (Array.isArray(value?.["@graph"])) {
+          bodies.push(...value["@graph"].filter((item) => item?.articleBody).map((item) => item.articleBody));
+        }
+      }
+    } catch {
+      // Ignore malformed metadata and continue with HTML extraction.
+    }
+  }
+  return bodies;
+}
+
+async function articleText(url, sourceTier) {
+  const resolved = await resolvePublisherUrl(url);
+  if (resolved.status === "unresolved") {
+    return { text: "", status: "rss_only", resolvedUrl: url, reason: "google_url_unresolved" };
+  }
+
+  try {
+    const response = await fetch(resolved.url, {
+      signal: AbortSignal.timeout(7000),
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 Minimum Times/1.0",
+        Accept: "text/html,application/xhtml+xml,application/json,text/plain;q=0.8",
+      },
+    });
+    if (!response.ok) {
+      return { text: "", status: "blocked", resolvedUrl: resolved.url, reason: `http_${response.status}` };
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("html") && !contentType.includes("json") && !contentType.includes("text")) {
+      return { text: "", status: "empty", resolvedUrl: resolved.url, reason: `unsupported_content_type:${contentType}` };
+    }
+
+    const body = await response.text();
+    const document = new JSDOM(body, { url: response.url || resolved.url }).window.document;
+    const parsed = new Readability(document).parse();
+    const candidates = [
+      ...jsonLdArticleBodies(document),
+      document.querySelector("article")?.textContent,
+      parsed?.textContent,
+    ].map(cleanText).filter(Boolean);
+    const text = candidates.sort((left, right) => right.length - left.length)[0] || "";
+    const words = text.split(/\s+/).filter(Boolean).length;
+
+    if (!text || isBlockedOrBoilerplate(text)) {
+      return { text: "", status: "blocked", resolvedUrl: response.url || resolved.url, reason: "boilerplate_or_interstitial" };
+    }
+    if (words < MIN_SHORT_VALID_WORDS) {
+      return { text: "", status: "empty", resolvedUrl: response.url || resolved.url, reason: "insufficient_article_text" };
+    }
+    return {
+      text,
+      status: words >= MIN_FULL_EXTRACTION_WORDS ? "full_extraction" : "short_but_valid",
+      resolvedUrl: response.url || resolved.url,
+      sourceTier,
+    };
+  } catch (error) {
+    return {
+      text: "",
+      status: "blocked",
+      resolvedUrl: resolved.url,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function fetchFeed({ scope, category, url, sourceName, sourceTier }) {
   let lastError;
 
   for (let attempt = 1; attempt <= feedAttempts; attempt += 1) {
@@ -127,6 +257,8 @@ async function fetchFeed(scope, category, url) {
         const story = {
           scope,
           category,
+          sourceName,
+          sourceTier,
           title: item.title || "Untitled story",
           url: item.link || "https://news.google.com/",
           published: item.pubDate || "",
@@ -139,6 +271,8 @@ async function fetchFeed(scope, category, url) {
           title: story.title,
           url: story.url,
           published: story.published,
+          source_name: story.sourceName,
+          source_tier: story.sourceTier,
           feed_text_length: story.text.length,
         });
         return story;
@@ -365,13 +499,20 @@ async function saveEdition(date, payload) {
 
 const today = new Date().toISOString().slice(0, 10);
 const previousEditionArticles = await loadPreviousEdition(today);
-const feedTasks = scopes.flatMap((scope) =>
-  categories.map((category) => ({
+const feedDefinitions = [
+  ...scopes.flatMap((scope) => categories.map((category) => ({
     scope,
     category,
-    promise: fetchFeed(scope, category, feeds[scope][category]),
-  }))
-);
+    sourceName: "Google News",
+    sourceTier: "signal",
+    url: feeds[scope][category],
+  }))),
+  ...directFeeds,
+];
+const feedTasks = feedDefinitions.map((definition) => ({
+  ...definition,
+  promise: fetchFeed(definition),
+}));
 const feedResults = await Promise.allSettled(feedTasks.map((task) => task.promise));
 feedResults.forEach((result, index) => {
   if (result.status === "rejected") {
@@ -410,18 +551,20 @@ for (const scope of scopes) {
         kept_url: kept.url,
       });
     });
-    const reviewArticles = await Promise.all(
+    const extractedArticles = await Promise.all(
       locallyDeduplicated.unique.map(async (item) => {
-        const extracted = await articleText(item.url, item.text);
+        const extracted = await articleText(item.url, item.sourceTier);
         extractionMetrics[extracted.status] += 1;
         return {
           ...item,
           text: extracted.text,
           extractionStatus: extracted.status,
+          resolvedUrl: extracted.resolvedUrl,
+          extractionReason: extracted.reason || "",
         };
       })
     );
-    reviewArticles.forEach((item) => {
+    extractedArticles.forEach((item) => {
       logPipeline("story_content_ready", {
         scope,
         category,
@@ -429,8 +572,11 @@ for (const scope of scopes) {
         url: item.url,
         content_length: item.text.length,
         extraction_status: item.extractionStatus,
+        resolved_url: item.resolvedUrl,
+        extraction_reason: item.extractionReason,
       });
     });
+    const reviewArticles = extractedArticles.filter((item) => item.text);
     const keptArticles = [];
     let keptCount = 0;
     let reviewBatchCount = 0;
@@ -531,8 +677,7 @@ for (const scope of scopes) {
 
 await saveEdition(today, payload);
 logPipeline("extraction_summary", {
-  full_extractions: extractionMetrics.full,
-  fallback_extractions: extractionMetrics.fallback,
-  total_stories_processed: extractionMetrics.full + extractionMetrics.fallback,
+  ...extractionMetrics,
+  total_stories_processed: Object.values(extractionMetrics).reduce((total, count) => total + count, 0),
 });
 console.log(`Published ${today} with ${selected.length} events.`);

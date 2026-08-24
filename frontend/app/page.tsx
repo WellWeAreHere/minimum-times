@@ -378,32 +378,6 @@ export default function Home() {
                             >
                               {event.details}
                             </p>
-                            {Object.keys(event.facts).length > 0 && (
-                              <dl className="mb-6 grid gap-2 text-sm sm:grid-cols-2">
-                                {Object.entries(event.facts).map(([key, value]) => (
-                                  <div key={key}>
-                                    <dt className="font-semibold uppercase text-xs text-gray-500">{key.replaceAll("_", " ")}</dt>
-                                    <dd>{value}</dd>
-                                  </div>
-                                ))}
-                              </dl>
-                            )}
-                            <p className="mt-6">
-                              <span className="text-gray-500">Sources:</span>{" "}
-                              {event.sources.map((source, sourceIndex) => (
-                                <span key={source}>
-                                  {sourceIndex > 0 && ", "}
-                                  <a
-                                    href={source}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={`${darkMode ? "text-blue-400" : "text-blue-700"} underline`}
-                                  >
-                                    {sourceIndex + 1}
-                                  </a>
-                                </span>
-                              ))}
-                            </p>
                           </div>
                         )}
                       </div>
