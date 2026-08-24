@@ -1,6 +1,6 @@
 import Parser from "rss-parser";
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -8,6 +8,8 @@ const { GoogleDecoder } = require("google-news-url-decoder");
 
 const parser = new Parser();
 const googleDecoder = new GoogleDecoder();
+const jsdomVirtualConsole = new VirtualConsole();
+jsdomVirtualConsole.on("jsdomError", () => {});
 const categories = ["politics", "sports", "business", "science", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
@@ -15,6 +17,8 @@ const batchSize = 3;
 const feedAttempts = 2;
 const MIN_SHORT_VALID_WORDS = 40;
 const MIN_FULL_EXTRACTION_WORDS = 120;
+const GOOGLE_RESOLUTION_TIMEOUT_MS = 15000;
+const MAX_ITEMS_PER_FEED = 20;
 const extractionMetrics = {
   full_extraction: 0,
   short_but_valid: 0,
@@ -134,7 +138,10 @@ function isGoogleNewsUrl(url) {
 async function resolvePublisherUrl(url) {
   if (!isGoogleNewsUrl(url)) return { url, status: "direct" };
   try {
-    const result = await googleDecoder.decode(url);
+    const result = await Promise.race([
+      googleDecoder.decode(url),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("google_url_resolution_timeout")), GOOGLE_RESOLUTION_TIMEOUT_MS)),
+    ]);
     if (result.status && result.decoded_url) {
       logPipeline("google_url_resolved", { wrapper_url: url, publisher_url: result.decoded_url });
       return { url: result.decoded_url, status: "resolved" };
@@ -210,7 +217,10 @@ async function articleText(url, sourceTier) {
     }
 
     const body = await response.text();
-    const document = new JSDOM(body, { url: response.url || resolved.url }).window.document;
+    const document = new JSDOM(body, {
+      url: response.url || resolved.url,
+      virtualConsole: jsdomVirtualConsole,
+    }).window.document;
     const parsed = new Readability(document).parse();
     const candidates = [
       ...jsonLdArticleBodies(document),
@@ -250,7 +260,7 @@ async function fetchFeed({ scope, category, url, sourceName, sourceTier }) {
       const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const feed = await parser.parseString(await response.text());
-      const items = feed.items.slice(0, 50);
+      const items = feed.items.slice(0, MAX_ITEMS_PER_FEED);
       if (items.length === 0) throw new Error("empty feed");
 
       return Promise.all(items.map(async (item, index) => {
