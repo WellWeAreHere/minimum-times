@@ -2,6 +2,9 @@
 
 - [x] Change the news pipeline to fetch articles, run keep/discard first, then deduplicate only the small approved set; remove the earlier AI deduplication pass.
 - [ ] Diagnose NVIDIA request failures with detailed response logging and reduce unnecessary AI requests through local deduplication, smaller feed batches, and limited retries.
+- [ ] Treat sports articles as structured match reports rather than generic summaries: extract `sport`, `match`, `teams`, `result`, `score`, `top_performer`, and `key_event`, then generate useful summaries such as “India beat Sri Lanka by 7 wickets, chasing 264; Devdutt Padikkal scored 103.”
+- [x] **Major architectural change — migrate from `Article` to `Event` as the fundamental data structure:** redesign ingestion, AI review/summarization, deduplication, persistence, APIs, and UI rendering around events that aggregate duplicate articles into one item with `category`, `importance`, `sources[]`, structured `facts`, `timestamp`, and `summary`.
+- [ ] Add the current edition date and a day counter below “The minimum news you need.”
 - [x] Add an Ideas / Features / Issues contact option that opens an email to iamherebcozidontknow@gmail.com.
 - [x] Add date-based access to previous editions, allowing users to browse an edition by its date.
 - [x] Add a client-side CATEGORIES menu beside the scope tabs, with accessible checkbox toggles, all categories selected by default, and Select all/Clear all actions.

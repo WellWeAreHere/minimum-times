@@ -1,16 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-type Article = {
-  title: string;
-  microSummary: string;
-  url: string;
-  published: string;
-  category: string;
-  scope: string;
-  details: string;
-};
+import type { NewsEvent } from "../types/event";
 
 const sections = [
   { key: "politics", label: "POLITICS" },
@@ -27,9 +18,9 @@ const scopes = [
 ];
 
 export default function Home() {
-  const [news, setNews] = useState<Article[] | null>(null);
+  const [news, setNews] = useState<NewsEvent[] | null>(null);
   const [error, setError] = useState("");
-  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<NewsEvent | null>(null);
   const [darkMode, setDarkMode] = useState(true);
   const [selectedScope, setSelectedScope] = useState("national");
   const [extremeMode, setExtremeMode] = useState(false);
@@ -41,9 +32,9 @@ export default function Home() {
   const [dateInput, setDateInput] = useState("");
   const [dateError, setDateError] = useState("");
 
-  function openArticle(article: Article) {
-    setSelectedArticle((selected) =>
-      selected?.url === article.url ? null : article
+  function openEvent(event: NewsEvent) {
+    setSelectedEvent((selected) =>
+      selected?.id === event.id ? null : event
     );
   }
 
@@ -53,7 +44,7 @@ export default function Home() {
         ? current.filter((item) => item !== category)
         : [...current, category]
     );
-    setSelectedArticle(null);
+    setSelectedEvent(null);
   }
 
   useEffect(() => {
@@ -172,7 +163,7 @@ export default function Home() {
                 aria-selected={isSelected}
                 onClick={() => {
                   setSelectedScope(scope.key);
-                  setSelectedArticle(null);
+                  setSelectedEvent(null);
                 }}
                 className={`border px-4 py-2 text-sm font-semibold transition ${
                   isSelected
@@ -215,7 +206,7 @@ export default function Home() {
 
               setDateError("");
               setEditionDate(dateInput);
-              setSelectedArticle(null);
+              setSelectedEvent(null);
               setNews(null);
             }}
             className={`border px-3 py-2 text-xs font-semibold ${
@@ -234,7 +225,7 @@ export default function Home() {
                 setEditionDate("");
                 setDateInput("");
                 setDateError("");
-                setSelectedArticle(null);
+                setSelectedEvent(null);
                 setNews(null);
               }}
               className={`border px-3 py-2 text-xs font-semibold ${
@@ -301,7 +292,7 @@ export default function Home() {
                     type="button"
                     onClick={() => {
                       setVisibleCategories([]);
-                      setSelectedArticle(null);
+                      setSelectedEvent(null);
                     }}
                     className="underline"
                   >
@@ -320,9 +311,9 @@ export default function Home() {
             </h2>
 
             {sections.filter((section) => visibleCategories.includes(section.key)).map((section) => {
-              const articles = news!.filter(
-                (article) =>
-                  article.scope === scope.key && article.category === section.key
+              const events = news!.filter(
+                (event) =>
+                  event.scope === scope.key && event.category === section.key
               );
 
               return (
@@ -331,14 +322,14 @@ export default function Home() {
                     {section.label}
                   </h3>
 
-                  {articles.length === 0 ? (
+                  {events.length === 0 ? (
                     <p className="text-gray-600 py-4">No major news.</p>
                   ) : (
-                    articles.map((article, index) => (
-                      <div key={`${article.url}-${index}`}>
+                    events.map((event) => (
+                      <div key={event.id}>
                         <button
                           type="button"
-                          onClick={() => openArticle(article)}
+                          onClick={() => openEvent(event)}
                           className={`block w-full text-left py-4 border-b transition ${
                             darkMode
                               ? "border-gray-900 hover:bg-gray-950"
@@ -346,14 +337,14 @@ export default function Home() {
                           }`}
                         >
                           <div className="text-lg leading-snug">
-                            {extremeMode ? article.microSummary : article.title}
+                            {extremeMode ? event.microSummary : event.summary}
                           </div>
                           <div className="text-xs text-gray-500 mt-2">
-                            {article.published}
+                            {event.timestamp}
                           </div>
                         </button>
 
-                        {selectedArticle?.url === article.url && (
+                        {selectedEvent?.id === event.id && (
                           <div
                             className={`border-b px-4 py-6 ${
                               darkMode
@@ -367,17 +358,33 @@ export default function Home() {
                             <p
                               className={`${darkMode ? "text-gray-300" : "text-gray-700"} leading-7 whitespace-pre-wrap`}
                             >
-                              {article.details}
+                              {event.details}
                             </p>
+                            {Object.keys(event.facts).length > 0 && (
+                              <dl className="mb-6 grid gap-2 text-sm sm:grid-cols-2">
+                                {Object.entries(event.facts).map(([key, value]) => (
+                                  <div key={key}>
+                                    <dt className="font-semibold uppercase text-xs text-gray-500">{key.replaceAll("_", " ")}</dt>
+                                    <dd>{value}</dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            )}
                             <p className="mt-6">
-                              <a
-                                href={article.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={`${darkMode ? "text-blue-400" : "text-blue-700"} underline`}
-                              >
-                                Read the full article →
-                              </a>
+                              <span className="text-gray-500">Sources:</span>{" "}
+                              {event.sources.map((source, sourceIndex) => (
+                                <span key={source}>
+                                  {sourceIndex > 0 && ", "}
+                                  <a
+                                    href={source}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={`${darkMode ? "text-blue-400" : "text-blue-700"} underline`}
+                                  >
+                                    {sourceIndex + 1}
+                                  </a>
+                                </span>
+                              ))}
                             </p>
                           </div>
                         )}

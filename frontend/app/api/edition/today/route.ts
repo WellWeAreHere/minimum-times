@@ -53,17 +53,21 @@ export async function GET(request: Request) {
   }
 
   const payload = rows[0].payload;
-  const articles = [];
+  const events = [];
 
   for (const scope of ["national", "international"]) {
     for (const category of ["politics", "sports", "business", "science", "entertainment", "tragedies"]) {
-      for (const article of payload[scope]?.[category] || []) {
-        articles.push({
-          title: article.short_summary,
-          microSummary: article.micro_summary || article.short_summary,
-          details: article.extended_summary,
-          url: article.url,
-          published: article.published,
+      for (const event of payload[scope]?.[category] || []) {
+        const isEvent = Array.isArray(event.sources);
+        events.push({
+          id: event.event_id || `${scope}-${category}-${events.length + 1}`,
+          summary: event.summary || event.short_summary || event.title || "Untitled event",
+          microSummary: event.micro_summary || event.summary || event.short_summary || "",
+          details: event.extended_summary || event.details || "",
+          sources: isEvent ? event.sources : event.url ? [event.url] : [],
+          facts: event.facts && typeof event.facts === "object" ? event.facts : {},
+          importance: Number(event.importance) || 0,
+          timestamp: event.timestamp || event.published || "",
           category,
           scope,
         });
@@ -71,5 +75,5 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json(articles);
+  return NextResponse.json(events);
 }

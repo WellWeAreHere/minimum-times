@@ -7,7 +7,6 @@ const categories = ["politics", "sports", "business", "science", "entertainment"
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
 const batchSize = 3;
-const dedupeBatchSize = 10;
 const feedAttempts = 3;
 const categoryGuidance = {
   politics: "government, elections, courts, public policy, diplomacy, or major political developments. Require a concrete decision, ruling, law, policy, official action, election result, or consequential development; discard reactions without a substantive development.",
@@ -42,6 +41,14 @@ for (const name of required) {
   if (!process.env[name]) throw new Error(`${name} is missing`);
 }
 
+function logPipeline(event, details = {}) {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    event,
+    ...details,
+  }));
+}
+
 const normalize = (value) => value
   .toLowerCase()
   .replace(/[^a-z0-9\s]/g, "")
@@ -65,6 +72,10 @@ function sameStory(left, right) {
 
 function limitWords(value, maxWords) {
   return String(value || "").trim().split(/\s+/).filter(Boolean).slice(0, maxWords).join(" ");
+}
+
+function normalizeImportance(value) {
+  return Math.max(1, Math.min(10, Math.round(Number(value) / 10) || 1));
 }
 
 async function articleText(url, fallback) {
@@ -94,14 +105,26 @@ async function fetchFeed(scope, category, url) {
       const items = feed.items.slice(0, 50);
       if (items.length === 0) throw new Error("empty feed");
 
-      return Promise.all(items.map(async (item) => ({
-        scope,
-        category,
-        title: item.title || "Untitled story",
-        url: item.link || "https://news.google.com/",
-        published: item.pubDate || "",
-        text: item.contentSnippet || item.content || "",
-      })));
+      return Promise.all(items.map(async (item, index) => {
+        const story = {
+          scope,
+          category,
+          title: item.title || "Untitled story",
+          url: item.link || "https://news.google.com/",
+          published: item.pubDate || "",
+          text: item.contentSnippet || item.content || "",
+        };
+        logPipeline("story_fetched", {
+          scope,
+          category,
+          feed_index: index,
+          title: story.title,
+          url: story.url,
+          published: story.published,
+          feed_text_length: story.text.length,
+        });
+        return story;
+      }));
     } catch (error) {
       lastError = error;
     }
@@ -124,11 +147,11 @@ async function loadPreviousEdition(date) {
     const payload = rows[0]?.payload;
     return scopes.flatMap((scope) =>
       categories.flatMap((category) =>
-        (payload?.[scope]?.[category] || []).map((article) => ({
+        (payload?.[scope]?.[category] || []).map((event) => ({
           scope,
           category,
-          title: article.short_summary || article.title || "",
-          url: article.url || "",
+          title: event.summary || event.short_summary || event.title || "",
+          url: event.sources?.[0] || event.url || "",
         }))
       )
     );
@@ -165,54 +188,38 @@ async function askNemotron(prompt, maxTokens, responseType = "array") {
   return Array.isArray(parsed) ? parsed : parsed.decisions || [];
 }
 
-async function deduplicateWithNemotron(items) {
-  const prompt = `You are a news deduplication editor. Group headlines that report the same real-world event, even when wording or publishers differ. Keep exactly one representative from each group, preferring the clearest and most authoritative headline. Do not discard distinct events. You must return one decision for every supplied index. Return ONLY valid JSON.
+async function groupEventsWithNemotron(items) {
+  const prompt = `You are a news event editor. Group supplied reports that describe the same real-world event. Different publishers reporting the same match, decision, accident, release, or other event belong in one group. Keep distinct events separate. Every supplied index must appear exactly once in one group. Return ONLY valid JSON.
 
-For every item return one decision with this shape:
-{"index":0,"keep":true}
+Return this shape:
+{"events":[{"indices":[0,1],"importance":9}]}
 
-ARTICLES:\n\n${items.map((item, index) => {
-    const summary = item.extended_summary || item.short_summary || item.text || "";
-    return `INDEX: ${index}\nHEADLINE: ${item.title}\nSUMMARY: ${summary}\nURL: ${item.url}`;
+Importance must be an integer from 1 to 10. ARTICLES:\n\n${items.map((item, index) => {
+    return `INDEX: ${index}\nHEADLINE: ${item.title}\nARTICLE TEXT: ${item.text}\nURL: ${item.url}`;
   }).join("\n\n")}`;
 
-  return askNemotron(prompt, 2000);
-}
+  const response = await askNemotron(prompt, 2500, "object");
+  const rawGroups = Array.isArray(response?.events) ? response.events : [];
+  const assigned = new Set();
+  const groups = [];
 
-async function hierarchicalDeduplicate(items) {
-  let survivors = [];
-  for (let start = 0; start < items.length; start += dedupeBatchSize) {
-    const batch = items.slice(start, start + dedupeBatchSize);
-    const decisions = await deduplicateWithNemotron(batch);
-    const batchSurvivors = decisions
-      .filter((decision) => decision.keep === true && batch[decision.index])
-      .map((decision) => batch[decision.index]);
-    survivors.push(...(batchSurvivors.length ? batchSurvivors : batch));
+  for (const group of rawGroups) {
+    const indices = Array.isArray(group.indices)
+      ? [...new Set(group.indices.filter((index) => Number.isInteger(index) && index >= 0 && index < items.length && !assigned.has(index)))]
+      : [];
+    if (!indices.length) continue;
+    indices.forEach((index) => assigned.add(index));
+    groups.push({
+      indices,
+      importance: Math.max(1, Math.min(10, Math.round(Number(group.importance) || 1))),
+    });
   }
 
-  while (survivors.length > dedupeBatchSize) {
-    const next = [];
-    for (let start = 0; start < survivors.length; start += dedupeBatchSize) {
-      const batch = survivors.slice(start, start + dedupeBatchSize);
-      const decisions = await deduplicateWithNemotron(batch);
-      const batchSurvivors = decisions
-        .filter((decision) => decision.keep === true && batch[decision.index])
-        .map((decision) => batch[decision.index]);
-      next.push(...(batchSurvivors.length ? batchSurvivors : batch));
-    }
-    if (next.length >= survivors.length) break;
-    survivors = next;
-  }
+  items.forEach((_item, index) => {
+    if (!assigned.has(index)) groups.push({ indices: [index], importance: 1 });
+  });
 
-  if (survivors.length > 1) {
-    const decisions = await deduplicateWithNemotron(survivors);
-    const finalSurvivors = decisions
-      .filter((decision) => decision.keep === true && survivors[decision.index])
-      .map((decision) => survivors[decision.index]);
-    if (finalSurvivors.length) survivors = finalSurvivors;
-  }
-
-  return survivors;
+  return groups;
 }
 
 async function reviewWithNemotron(items) {
@@ -247,28 +254,29 @@ ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}
   return [];
 }
 
-async function summarizeArticleWithNemotron(article) {
-  const prompt = `You are a concise news editor. Summarize the supplied article text only. Do not use outside knowledge and do not invent facts. Preserve important names, dates, numbers, scores, causes, and consequences.
+async function summarizeEventWithNemotron(items, importance) {
+  const sportsInstruction = items[0].category === "sports"
+    ? `For sports, facts MUST include these exact keys: sport, match, teams, result, score, top_performer, key_event. Do not reduce a match to a generic victory. Include margin, target, overs, scores, performers, and decisive moments when supplied.`
+    : "For non-sports, facts should contain the most useful concrete names, decisions, numbers, locations, or consequences supplied by the reports.";
+  const prompt = `You are a concise event editor. Combine the supplied reports about ONE real-world event. Use only the supplied text; do not invent facts or use outside knowledge. Prefer facts repeated or clearly stated by sources. ${sportsInstruction}
 
 Return ONLY valid JSON with this exact structure:
-{"short_summary":"maximum 30 words","micro_summary":"maximum 10 words, terse factual wording","extended_summary":"100-150 factual words"}
+{"facts":{"key":"value"},"summary":"maximum 30 words","micro_summary":"maximum 10 words","extended_summary":"100-150 factual words"}
 
-CATEGORY: ${article.category}
-ARTICLE TEXT:
-${article.text}`;
-
-  const summary = await askNemotron(prompt, 1200, "object");
-
-  if (
-    !summary ||
-    typeof summary.short_summary !== "string" ||
-    typeof summary.micro_summary !== "string" ||
-    typeof summary.extended_summary !== "string"
-  ) {
-    throw new Error("Nemotron returned an invalid article summary");
+CATEGORY: ${items[0].category}
+EVENT IMPORTANCE: ${importance}/10
+REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${item.text}`).join("\n\n")}`;
+  const summary = await askNemotron(prompt, 1500, "object");
+  if (!summary || typeof summary.summary !== "string" || typeof summary.micro_summary !== "string" || typeof summary.extended_summary !== "string" || !summary.facts || typeof summary.facts !== "object") {
+    throw new Error("Nemotron returned an invalid event summary");
   }
-
-  return summary;
+  const facts = Object.fromEntries(Object.entries(summary.facts).filter(([key, value]) => typeof key === "string" && typeof value === "string"));
+  return {
+    facts,
+    summary: limitWords(summary.summary, 30),
+    micro_summary: limitWords(summary.micro_summary, 10),
+    extended_summary: limitWords(summary.extended_summary, 150),
+  };
 }
 
 async function saveEdition(date, payload) {
@@ -333,6 +341,15 @@ for (const scope of scopes) {
         text: await articleText(item.url, item.text),
       }))
     );
+    reviewArticles.forEach((item) => {
+      logPipeline("story_content_ready", {
+        scope,
+        category,
+        title: item.title,
+        url: item.url,
+        content_length: item.text.length,
+      });
+    });
     const keptArticles = [];
     let keptCount = 0;
     let reviewBatchCount = 0;
@@ -363,32 +380,53 @@ for (const scope of scopes) {
     keptCount = keptArticles.length;
     const candidates = keptArticles
       .sort((a, b) => b.importance - a.importance)
-      .slice(0, maxPerCategory);
-    let deduplicatedArticles = candidates;
-
+      .slice(0, maxPerCategory * 3);
+    let eventGroups = candidates.map((article, index) => ({
+      indices: [index],
+      importance: normalizeImportance(article.importance),
+    }));
+    const headlineArticles = eventGroups;
     if (candidates.length > 1) {
       try {
-        deduplicatedArticles = await hierarchicalDeduplicate(candidates);
+        eventGroups = await groupEventsWithNemotron(candidates);
       } catch (error) {
-        console.warn(`Deduplication failed for ${scope}/${category}: ${error.message}`);
+        console.warn(`Event grouping failed for ${scope}/${category}: ${error.message}`);
       }
     }
 
-    for (const article of deduplicatedArticles) {
+    for (const [eventIndex, group] of eventGroups.entries()) {
+      const eventArticles = group.indices.map((index) => candidates[index]).filter(Boolean);
+      if (!eventArticles.length) continue;
       try {
-        const summary = await summarizeArticleWithNemotron(article);
+        const summary = await summarizeEventWithNemotron(eventArticles, group.importance);
         selected.push({
-          ...article,
-          short_summary: limitWords(summary.short_summary, 30),
-          micro_summary: limitWords(summary.micro_summary, 10),
-          extended_summary: limitWords(summary.extended_summary, 150),
+          event_id: `${scope}-${category}-${eventIndex + 1}`,
+          scope,
+          category,
+          importance: group.importance,
+          sources: eventArticles.map((article) => article.url).filter(Boolean),
+          facts: summary.facts,
+          timestamp: eventArticles.map((article) => article.published).find(Boolean) || "",
+          summary: summary.summary,
+          micro_summary: summary.micro_summary,
+          extended_summary: summary.extended_summary,
+        });
+        logPipeline("event_created", {
+          event_id: `${scope}-${category}-${eventIndex + 1}`,
+          scope,
+          category,
+          importance: group.importance,
+          source_count: eventArticles.length,
+          sources: eventArticles.map((article) => article.url).filter(Boolean),
+          facts: summary.facts,
+          summary: summary.summary,
+          micro_summary: summary.micro_summary,
+          extended_summary: summary.extended_summary,
         });
       } catch (error) {
-        console.warn(`Summary failed for ${scope}/${category}: ${error.message}`);
+        console.warn(`Event summary failed for ${scope}/${category}: ${error.message}`);
       }
     }
-
-    const headlineArticles = deduplicatedArticles;
 
     console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${previousMatches.length} similar to previous edition → ${categoryArticles.length} new → ${headlineArticles.length} deduplicated → ${reviewBatchCount} review batches (${validDecisionCount} valid decisions) → ${keptCount} kept`);
   }
@@ -397,18 +435,18 @@ for (const scope of scopes) {
 const payload = { national: {}, international: {} };
 for (const scope of scopes) {
   for (const category of categories) {
-    const categoryArticles = selected
+    const categoryEvents = selected
       .filter((item) => item.scope === scope && item.category === category)
       .sort((a, b) => b.importance - a.importance)
       .slice(0, maxPerCategory);
 
-    if (categoryArticles.length === 0) {
+    if (categoryEvents.length === 0) {
       console.warn(`No major, correctly categorized articles for ${scope}/${category}; publishing that category empty`);
     }
 
-    payload[scope][category] = categoryArticles;
+    payload[scope][category] = categoryEvents;
   }
 }
 
 await saveEdition(today, payload);
-console.log(`Published ${today} with ${selected.length} selected articles.`);
+console.log(`Published ${today} with ${selected.length} events.`);
