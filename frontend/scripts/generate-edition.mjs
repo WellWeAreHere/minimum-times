@@ -690,6 +690,14 @@ feedResults.forEach((result, index) => {
     console.warn(`Feed unavailable for ${task.scope}/${task.category}: ${result.reason?.message || result.reason}`);
   }
 });
+const allFeedsFailedWith503 = feedResults.length === feedTasks.length &&
+  feedResults.every((result) =>
+    result.status === "rejected" && /HTTP 503\b/.test(result.reason?.message || String(result.reason))
+  );
+if (allFeedsFailedWith503) {
+  console.error("All Google News RSS feeds returned HTTP 503; requesting a delayed workflow retry.");
+  process.exit(75);
+}
 const articles = feedResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 const selected = [];
 

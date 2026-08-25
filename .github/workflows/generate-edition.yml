@@ -24,15 +24,27 @@ jobs:
       - name: Generate edition with retries
         shell: bash
         run: |
+          delayed_rss_retry_used=false
           for attempt in 1 2 3 4 5; do
             echo "Edition generation attempt $attempt/5"
-            if node scripts/generate-edition.mjs; then
+            set +e
+            node scripts/generate-edition.mjs
+            status=$?
+            set -e
+
+            if [ "$status" -eq 0 ]; then
               exit 0
             fi
 
             if [ "$attempt" -lt 5 ]; then
-              delay=$((attempt * 30))
-              echo "Attempt failed; retrying in ${delay}s"
+              if [ "$status" -eq 75 ] && [ "$delayed_rss_retry_used" = false ]; then
+                delay=1200
+                delayed_rss_retry_used=true
+                echo "All Google News RSS feeds returned HTTP 503; retrying in 20 minutes"
+              else
+                delay=$((attempt * 30))
+                echo "Attempt failed; retrying in ${delay}s"
+              fi
               sleep "$delay"
             fi
           done
