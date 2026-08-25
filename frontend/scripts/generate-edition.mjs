@@ -13,10 +13,10 @@ jsdomVirtualConsole.on("jsdomError", () => {});
 const categories = ["politics", "sports", "business", "science", "entertainment", "tragedies"];
 const scopes = ["national", "international"];
 const maxPerCategory = 4;
-const batchSize = 3;
 const feedAttempts = 2;
 const FEED_TIMEOUT_MS = 30000;
 const FEED_CONCURRENCY = 3;
+const EVENT_PUBLISH_THRESHOLD = 0.6;
 const MIN_SHORT_VALID_WORDS = 40;
 const MIN_FULL_EXTRACTION_WORDS = 120;
 const GOOGLE_RESOLUTION_TIMEOUT_MS = 15000;
@@ -463,13 +463,21 @@ ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}
       ? ""
       : "\nYour previous response did not match the required schema. Retry and return every decision with exactly these fields: index, keep, rating.";
     const decisions = await askNemotron(`${ratingPrompt}${retryInstruction}`, 4000);
-    const validDecisions = decisions.filter((decision) =>
-      Number.isInteger(decision.index) &&
-      decision.index >= 0 &&
-      decision.index < items.length &&
-      typeof decision.keep === "boolean" &&
-      Number.isFinite(Number(decision.rating))
-    );
+    const validDecisions = decisions
+      .map((decision) => {
+        const index = Number(decision.index);
+        const rating = decision.rating !== undefined
+          ? Number(decision.rating)
+          : Number(decision.importance) / 100;
+        return { ...decision, index, rating: normalizeRating(rating) };
+      })
+      .filter((decision) =>
+        Number.isInteger(decision.index) &&
+        decision.index >= 0 &&
+        decision.index < items.length &&
+        typeof decision.keep === "boolean" &&
+        Number.isFinite(Number(decision.rating))
+      );
     const uniqueDecisions = [...new Map(validDecisions.map((decision) => [decision.index, decision])).values()];
     if (uniqueDecisions.length === items.length) return uniqueDecisions;
     console.warn(`Review schema mismatch for ${scope}/${category}: ${uniqueDecisions.length}/${items.length} valid decisions on attempt ${attempt}`);
@@ -507,6 +515,136 @@ REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${it
     micro_summary: limitWords(summary.micro_summary, 10),
     extended_summary: limitWords(summary.extended_summary, 150),
   };
+}
+
+async function classifyArticlesIntoEventsWithNemotron(scope, category, articles, events) {
+  const existingEvents = events.map((event) => ({
+    event_id: event.event_id,
+    summary: event.summary,
+    micro_summary: event.micro_summary,
+    sources: event.sources,
+  }));
+  const prompt = `You are maintaining the ${scope}/${category} news event list. For each new article, decide whether it belongs to one existing event or starts a new event. Articles belong together only when they describe the same real-world event, not merely the same topic. Return one assignment for every article. Use an existing event_id exactly when matching; otherwise use a unique value beginning with new_. Return ONLY valid JSON.
+
+Return this shape:
+{"assignments":[{"article_index":0,"event_id":"existing-id-or-new_0"}]}
+
+EXISTING EVENTS:
+${JSON.stringify(existingEvents)}
+
+NEW ARTICLES:
+${articles.map((article, index) => `ARTICLE_INDEX: ${index}\nHEADLINE: ${article.title}\nTEXT: ${article.text}\nURL: ${article.url}`).join("\n\n")}`;
+  const response = await askNemotron(prompt, 3000, "object");
+  const rawAssignments = Array.isArray(response?.assignments) ? response.assignments : [];
+  const existingIds = new Set(events.map((event) => event.event_id));
+  const usedArticles = new Set();
+  const assignments = [];
+
+  rawAssignments.forEach((assignment) => {
+    const articleIndex = Number(assignment.article_index);
+    const eventId = String(assignment.event_id || "");
+    if (!Number.isInteger(articleIndex) || articleIndex < 0 || articleIndex >= articles.length || usedArticles.has(articleIndex)) return;
+    if (!eventId || (eventId !== "new" && !eventId.startsWith("new_") && !existingIds.has(eventId))) return;
+    usedArticles.add(articleIndex);
+    assignments.push({ articleIndex, eventId });
+  });
+
+  articles.forEach((_article, articleIndex) => {
+    if (!usedArticles.has(articleIndex)) assignments.push({ articleIndex, eventId: `new_${articleIndex}` });
+  });
+  return assignments;
+}
+
+async function buildEventsIncrementally(scope, category, articles) {
+  const events = [];
+  let nextEventNumber = 1;
+
+  for (let start = 0; start < articles.length; start += 5) {
+    const batch = articles.slice(start, start + 5);
+    let assignments;
+    try {
+      assignments = await classifyArticlesIntoEventsWithNemotron(scope, category, batch, events);
+    } catch (error) {
+      console.warn(`Event classification failed for ${scope}/${category}: ${error.message}; treating batch articles as separate events`);
+      assignments = batch.map((_article, index) => ({ articleIndex: index, eventId: `new_${index}` }));
+    }
+    const grouped = new Map();
+    assignments.forEach(({ articleIndex, eventId }) => {
+      if (!grouped.has(eventId)) grouped.set(eventId, []);
+      grouped.get(eventId).push(batch[articleIndex]);
+    });
+
+    for (const [assignmentId, assignedArticles] of grouped) {
+      let event = events.find((candidate) => candidate.event_id === assignmentId);
+      if (!event) {
+        event = {
+          event_id: `${scope}-${category}-${nextEventNumber++}`,
+          articles: [],
+          sources: [],
+        };
+        events.push(event);
+      }
+      event.articles.push(...assignedArticles);
+      let summary;
+      try {
+        summary = await summarizeEventWithNemotron(event.articles, 5);
+      } catch (error) {
+        console.warn(`Event summary failed for ${scope}/${category}: ${error.message}; using extracted article fallback`);
+        const firstArticle = event.articles[0];
+        summary = {
+          facts: {},
+          summary: limitWords(firstArticle.title, 30),
+          micro_summary: limitWords(firstArticle.title, 10),
+          extended_summary: limitWords(firstArticle.text, 150),
+        };
+      }
+      event.facts = summary.facts;
+      event.summary = summary.summary;
+      event.micro_summary = summary.micro_summary;
+      event.extended_summary = summary.extended_summary;
+      event.sources = [...new Set(event.articles.map((article) => article.url).filter(Boolean))];
+      event.timestamp = event.articles.map((article) => article.published).find(Boolean) || "";
+      event.scope = scope;
+      event.category = category;
+      logPipeline("event_updated", {
+        event_id: event.event_id,
+        scope,
+        category,
+        article_count: event.articles.length,
+        sources: event.sources,
+        summary: event.summary,
+      });
+    }
+  }
+  return events;
+}
+
+async function rateEventsWithNemotron(scope, category, events) {
+  const prompt = `You are rating the completed ${scope}/${category} news events for usefulness to readers. Rate every event independently from 0.0 to 1.0. Use 1.0 for the most important, useful, well-supported event in this category and 0.0 for irrelevant, minor, vague, or weak events. Return exactly one rating for every event. Return ONLY valid JSON.
+
+Return this shape:
+{"ratings":[{"event_index":0,"rating":0.87}]}
+
+EVENTS:
+${events.map((event, index) => `EVENT_INDEX: ${index}\nSUMMARY: ${event.summary}\nDETAILS: ${event.extended_summary}\nSOURCES: ${event.sources.join(", ")}`).join("\n\n")}`;
+  let ratings = [];
+  try {
+    const response = await askNemotron(prompt, 2500, "object");
+    const rawRatings = Array.isArray(response?.ratings) ? response.ratings : [];
+    ratings = rawRatings
+      .map((item) => ({ eventIndex: Number(item.event_index), rating: normalizeRating(item.rating) }))
+      .filter((item) => Number.isInteger(item.eventIndex) && item.eventIndex >= 0 && item.eventIndex < events.length)
+      .filter((item, index, values) => values.findIndex((candidate) => candidate.eventIndex === item.eventIndex) === index);
+  } catch (error) {
+    console.warn(`Event rating failed for ${scope}/${category}: ${error.message}`);
+  }
+
+  const ratingByIndex = new Map(ratings.map((item) => [item.eventIndex, item.rating]));
+  return events.map((event, index) => ({
+    ...event,
+    rating: ratingByIndex.has(index) ? ratingByIndex.get(index) : 0.5,
+    rating_source: ratingByIndex.has(index) ? "ai" : "rating_fallback",
+  }));
 }
 
 async function saveEdition(date, payload) {
@@ -606,111 +744,42 @@ for (const scope of scopes) {
         extraction_reason: item.extractionReason,
       });
     });
-    const reviewArticles = extractedArticles.filter((item) => item.text);
-    const reviewedArticles = [];
-    const keptArticles = [];
-    let keptCount = 0;
-    let reviewBatchCount = 0;
-    let validDecisionCount = 0;
-
+    const fullArticles = extractedArticles.filter((item) => item.extractionStatus === "full_extraction");
+    let events = [];
     try {
-      for (let start = 0; start < reviewArticles.length; start += batchSize) {
-        const batch = reviewArticles.slice(start, start + batchSize);
-        reviewBatchCount += 1;
-        const decisions = await reviewWithNemotron(batch);
-        validDecisionCount += decisions.length;
-        for (const decision of decisions) {
-          const item = batch[decision.index];
-          if (!item) continue;
-          const reviewedArticle = {
-            ...item,
-            rating: normalizeRating(decision.rating),
-          };
-          reviewedArticles.push(reviewedArticle);
-          logPipeline("story_reviewed", {
-            scope,
-            category,
-            title: item.title,
-            url: item.url,
-            rating: reviewedArticle.rating,
-            keep: decision.keep,
-          });
-          if (decision.keep) {
-            keptArticles.push(reviewedArticle);
-          }
-        }
-      }
+      events = await buildEventsIncrementally(scope, category, fullArticles);
+      events = await rateEventsWithNemotron(scope, category, events);
     } catch (error) {
-      console.warn(`Review failed for ${scope}/${category}: ${error.message}`);
+      console.warn(`Event pipeline failed for ${scope}/${category}: ${error.message}`);
     }
 
-    keptCount = keptArticles.length;
-    let candidatePool = keptArticles;
-    if (!candidatePool.length && reviewedArticles.length) {
-      const highestRated = [...reviewedArticles].sort((a, b) => b.rating - a.rating)[0];
-      candidatePool = [highestRated];
-      console.warn(`No kept articles for ${scope}/${category}; using highest-rated story as category fallback (rating ${highestRated.rating})`);
-      logPipeline("category_fallback_selected", {
+    const rankedEvents = [...events].sort((a, b) => b.rating - a.rating);
+    const publishedEvents = rankedEvents
+      .filter((event, index) => index === 0 || event.rating >= EVENT_PUBLISH_THRESHOLD)
+      .slice(0, maxPerCategory);
+    publishedEvents.forEach((event) => {
+      const publishedEvent = {
+        event_id: event.event_id,
         scope,
         category,
-        title: highestRated.title,
-        url: highestRated.url,
-        rating: highestRated.rating,
+        rating: event.rating,
+        importance: normalizeImportance(event.rating),
+        sources: event.sources,
+        facts: event.facts,
+        timestamp: event.timestamp,
+        summary: event.summary,
+        micro_summary: event.micro_summary,
+        extended_summary: event.extended_summary,
+      };
+      selected.push(publishedEvent);
+      logPipeline("event_created", {
+        ...publishedEvent,
+        article_count: event.articles.length,
+        rating_source: event.rating_source,
       });
-    }
-    const candidates = candidatePool
-      .sort((a, b) => b.rating - a.rating)
-      .slice(0, maxPerCategory * 3);
-    let eventGroups = candidates.map((article, index) => ({
-      indices: [index],
-      importance: normalizeImportance(article.rating),
-    }));
-    const headlineArticles = eventGroups;
-    if (candidates.length > 1) {
-      try {
-        eventGroups = await groupEventsWithNemotron(candidates);
-      } catch (error) {
-        console.warn(`Event grouping failed for ${scope}/${category}: ${error.message}`);
-      }
-    }
+    });
 
-    for (const [eventIndex, group] of eventGroups.entries()) {
-      const eventArticles = group.indices.map((index) => candidates[index]).filter(Boolean);
-      if (!eventArticles.length) continue;
-      try {
-        const summary = await summarizeEventWithNemotron(eventArticles, group.importance);
-        selected.push({
-          event_id: `${scope}-${category}-${eventIndex + 1}`,
-          scope,
-          category,
-          rating: Math.max(...eventArticles.map((article) => article.rating || 0)),
-          importance: group.importance,
-          sources: eventArticles.map((article) => article.url).filter(Boolean),
-          facts: summary.facts,
-          timestamp: eventArticles.map((article) => article.published).find(Boolean) || "",
-          summary: summary.summary,
-          micro_summary: summary.micro_summary,
-          extended_summary: summary.extended_summary,
-        });
-        logPipeline("event_created", {
-          event_id: `${scope}-${category}-${eventIndex + 1}`,
-          scope,
-          category,
-          rating: Math.max(...eventArticles.map((article) => article.rating || 0)),
-          importance: group.importance,
-          source_count: eventArticles.length,
-          sources: eventArticles.map((article) => article.url).filter(Boolean),
-          facts: summary.facts,
-          summary: summary.summary,
-          micro_summary: summary.micro_summary,
-          extended_summary: summary.extended_summary,
-        });
-      } catch (error) {
-        console.warn(`Event summary failed for ${scope}/${category}: ${error.message}`);
-      }
-    }
-
-    console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${previousMatches.length} similar to previous edition → ${categoryArticles.length} new → ${headlineArticles.length} deduplicated → ${reviewBatchCount} review batches (${validDecisionCount} valid decisions) → ${keptCount} kept`);
+    console.log(`${scope}/${category}: ${fetchedArticles.length} fetched â†’ ${previousMatches.length} similar to previous edition â†’ ${categoryArticles.length} new â†’ ${fullArticles.length} full extracts â†’ ${events.length} events â†’ ${publishedEvents.length} published`);
   }
 }
 
