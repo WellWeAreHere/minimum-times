@@ -493,6 +493,8 @@ async function summarizeEventWithNemotron(items, importance) {
     : "For non-sports, facts should contain the most useful concrete names, decisions, numbers, locations, or consequences supplied by the reports.";
   const prompt = `You are a concise event editor. Combine the supplied reports about ONE real-world event. Use only the supplied text; do not invent facts or use outside knowledge. Prefer facts repeated or clearly stated by sources. ${sportsInstruction}
 
+For micro_summary, write one complete, standalone sentence in at most 10 words. It must name the main subject and state the key action, result, or event. Use fewer words when needed. Never output a fragment, a sentence beginning with a pronoun, a dangling phrase, or a clipped sentence. Include the most important concrete number or score when one is supplied and can fit. Check that the sentence still makes sense on its own before returning it.
+
 Return ONLY valid JSON with this exact structure:
 {"facts":{"key":"value"},"summary":"maximum 30 words","micro_summary":"maximum 10 words","extended_summary":"100-150 factual words"}
 

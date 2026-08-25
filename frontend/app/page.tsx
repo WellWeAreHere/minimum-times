@@ -126,12 +126,12 @@ export default function Home() {
   }
 
   return (
-    <main className={`min-h-screen ${theme}`}>
-      <div className="max-w-4xl mx-auto px-6 py-10">
+    <main className={`min-h-screen overflow-x-hidden ${theme}`}>
+      <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
         <header className="mb-14">
-          <h1 className="text-5xl font-bold tracking-tight">MINIMUM TIMES</h1>
-          <div className="flex items-center justify-between gap-6">
-            <p className={`${darkMode ? "text-gray-400" : "text-gray-600"} mt-2`}>
+          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">MINIMUM TIMES</h1>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <p className={`${darkMode ? "text-gray-400" : "text-gray-600"} mt-2 min-w-0`}>
               The minimum news you need.
             </p>
             {loadedEditionDate && (
@@ -139,7 +139,7 @@ export default function Home() {
                 {formatEditionDate(loadedEditionDate)}
               </p>
             )}
-            <div className="flex shrink-0 gap-2">
+            <div className="flex max-w-full flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setDarkMode((value) => !value)}
@@ -208,7 +208,7 @@ export default function Home() {
             type="date"
             value={dateInput}
             onChange={(event) => setDateInput(event.target.value)}
-            className={`border px-3 py-2 text-sm ${
+            className={`border px-3 py-2 text-sm [color-scheme:light] ${
               darkMode
                 ? "border-gray-700 bg-black text-white"
                 : "border-gray-300 bg-white text-black"
@@ -399,24 +399,12 @@ export default function Home() {
             darkMode ? "border-gray-800 text-gray-500" : "border-gray-200 text-gray-600"
           }`}
         >
-          <span>Ideas, features, or issues?</span>{" "}
+          <span>Ideas, issues, or suggestions?</span>{" "}
           <a
-            href="mailto:iamherebcozidontknow@gmail.com?subject=Idea%20for%20Minimum%20Times"
+            href="mailto:iamherebcozidontknow@gmail.com?subject=Feedback%20for%20Minimum%20Times"
             className="underline hover:text-current"
           >
-            IDEA
-          </a>{" "}
-          <a
-            href="mailto:iamherebcozidontknow@gmail.com?subject=Feature%20request%20for%20Minimum%20Times"
-            className="underline hover:text-current"
-          >
-            FEATURE
-          </a>{" "}
-          <a
-            href="mailto:iamherebcozidontknow@gmail.com?subject=Issue%20with%20Minimum%20Times"
-            className="underline hover:text-current"
-          >
-            ISSUE
+            → Email us
           </a>
         </footer>
       </div>
