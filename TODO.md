@@ -1,6 +1,6 @@
 # TODO
 
-- [x] Use GDELT DOC RSS as the sole news discovery source; remove PIB/RBI supplemental feeds.
+- [x] Use Google News RSS with publisher URL decoding as the sole news discovery source; remove PIB/RBI supplemental feeds.
 - [x] Change the news pipeline to fetch articles, run keep/discard first, then deduplicate only the small approved set; remove the earlier AI deduplication pass.
 - [x] Diagnose NVIDIA request failures with detailed response logging and reduce unnecessary AI requests through local deduplication, smaller feed batches, and limited retries.
 - [x] Treat sports articles as structured match reports rather than generic summaries: extract `sport`, `match`, `teams`, `result`, `score`, `top_performer`, and `key_event`, then generate useful summaries such as "India beat Sri Lanka by 7 wickets, chasing 264; Devdutt Padikkal scored 103."
