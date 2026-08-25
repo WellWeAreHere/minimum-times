@@ -10,6 +10,8 @@ const scopes = ["national", "international"];
 const maxPerCategory = 4;
 const batchSize = 3;
 const feedAttempts = 2;
+const FEED_TIMEOUT_MS = 30000;
+const FEED_CONCURRENCY = 3;
 const MIN_SHORT_VALID_WORDS = 40;
 const MIN_FULL_EXTRACTION_WORDS = 120;
 const MAX_ITEMS_PER_FEED = 20;
@@ -59,23 +61,6 @@ const feeds = {
     tragedies: gdeltFeed("(earthquake OR accident OR fire OR explosion OR flood OR crash) -India"),
   },
 };
-
-const directFeeds = [
-  {
-    scope: "national",
-    category: "politics",
-    sourceName: "PIB India",
-    sourceTier: "primary",
-    url: "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=5",
-  },
-  {
-    scope: "national",
-    category: "business",
-    sourceName: "RBI",
-    sourceTier: "primary",
-    url: "https://www.rbi.org.in/Scripts/rss.aspx",
-  },
-];
 
 const required = ["NVIDIA_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
 for (const name of required) {
@@ -229,7 +214,10 @@ async function fetchFeed({ scope, category, url, sourceName, sourceTier }) {
 
   for (let attempt = 1; attempt <= feedAttempts; attempt += 1) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
+        headers: { Accept: "application/rss+xml, application/xml, text/xml;q=0.9" },
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const feed = await parser.parseString(await response.text());
       const items = feed.items.slice(0, MAX_ITEMS_PER_FEED);
@@ -261,10 +249,39 @@ async function fetchFeed({ scope, category, url, sourceName, sourceTier }) {
       }));
     } catch (error) {
       lastError = error;
+      if (attempt < feedAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+      }
     }
   }
 
   throw new Error(`Feed failed after ${feedAttempts} attempts: ${scope}/${category} (${lastError?.message || "unknown error"})`);
+}
+
+async function runFeedTasks(tasks) {
+  const results = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const task = tasks[index];
+      try {
+        results[index] = { status: "fulfilled", value: await fetchFeed(task) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(FEED_CONCURRENCY, tasks.length) },
+      () => worker(),
+    ),
+  );
+  return results;
 }
 
 async function loadPreviousEdition(date) {
@@ -489,13 +506,11 @@ const feedDefinitions = [
     sourceTier: "signal",
     url: feeds[scope][category],
   }))),
-  ...directFeeds,
 ];
 const feedTasks = feedDefinitions.map((definition) => ({
   ...definition,
-  promise: fetchFeed(definition),
 }));
-const feedResults = await Promise.allSettled(feedTasks.map((task) => task.promise));
+const feedResults = await runFeedTasks(feedTasks);
 feedResults.forEach((result, index) => {
   if (result.status === "rejected") {
     const task = feedTasks[index];
