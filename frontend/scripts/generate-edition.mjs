@@ -1,13 +1,8 @@
 import Parser from "rss-parser";
 import { Readability } from "@mozilla/readability";
 import { JSDOM, VirtualConsole } from "jsdom";
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const { GoogleDecoder } = require("google-news-url-decoder");
 
 const parser = new Parser();
-const googleDecoder = new GoogleDecoder();
 const jsdomVirtualConsole = new VirtualConsole();
 jsdomVirtualConsole.on("jsdomError", () => {});
 const categories = ["politics", "sports", "business", "science", "entertainment", "tragedies"];
@@ -17,7 +12,6 @@ const batchSize = 3;
 const feedAttempts = 2;
 const MIN_SHORT_VALID_WORDS = 40;
 const MIN_FULL_EXTRACTION_WORDS = 120;
-const GOOGLE_RESOLUTION_TIMEOUT_MS = 15000;
 const MAX_ITEMS_PER_FEED = 20;
 const extractionMetrics = {
   full_extraction: 0,
@@ -35,22 +29,34 @@ const categoryGuidance = {
   tragedies: "significant deaths, disasters, crashes, fires, explosions, floods, earthquakes, wars, or emergencies. State the event, location, scale, and confirmed deaths, injuries, displacement, affected population, damage, or official response; merge repetitive updates about the same event.",
 };
 
+function gdeltFeed(query) {
+  const params = new URLSearchParams({
+    query,
+    mode: "artlist",
+    maxrecords: "50",
+    timespan: "1d",
+    sort: "datedesc",
+    format: "rssarchive",
+  });
+  return `https://api.gdeltproject.org/api/v2/doc/doc?${params}`;
+}
+
 const feeds = {
   national: {
-    politics: "https://news.google.com/rss/search?q=India+(government+OR+parliament+OR+election+OR+minister+OR+court)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
-    sports: "https://news.google.com/rss/search?q=India+(sports+OR+cricket+OR+football)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
-    business: "https://news.google.com/rss/search?q=India+(business+OR+economy+OR+market+OR+company+OR+inflation+OR+budget)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
-    science: "https://news.google.com/rss/search?q=India+(science+OR+technology+OR+AI+OR+space+OR+cybersecurity)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
-    entertainment: "https://news.google.com/rss/search?q=India+(actor+OR+film+OR+music+OR+entertainment)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
-    tragedies: "https://news.google.com/rss/search?q=India+(earthquake+OR+accident+OR+fire+OR+explosion+OR+flood+OR+crash)+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    politics: gdeltFeed("India (government OR parliament OR election OR minister OR court)"),
+    sports: gdeltFeed("India (sports OR cricket OR football)"),
+    business: gdeltFeed("India (business OR economy OR market OR company OR inflation OR budget)"),
+    science: gdeltFeed("India (science OR technology OR AI OR space OR cybersecurity)"),
+    entertainment: gdeltFeed("India (actor OR film OR music OR entertainment)"),
+    tragedies: gdeltFeed("India (earthquake OR accident OR fire OR explosion OR flood OR crash)"),
   },
   international: {
-    politics: "https://news.google.com/rss/search?q=(government+OR+parliament+OR+election+OR+president+OR+court)+-India+when:1d&hl=en&gl=US&ceid=US:en",
-    sports: "https://news.google.com/rss/search?q=(sports+OR+football+OR+tennis+OR+Olympics)+-India+when:1d&hl=en&gl=US&ceid=US:en",
-    business: "https://news.google.com/rss/search?q=(business+OR+economy+OR+market+OR+company+OR+inflation)+-India+when:1d&hl=en&gl=US&ceid=US:en",
-    science: "https://news.google.com/rss/search?q=(science+OR+technology+OR+AI+OR+space+OR+cybersecurity)+-India+when:1d&hl=en&gl=US&ceid=US:en",
-    entertainment: "https://news.google.com/rss/search?q=(actor+OR+film+OR+music+OR+entertainment)+-India+when:1d&hl=en&gl=US&ceid=US:en",
-    tragedies: "https://news.google.com/rss/search?q=(earthquake+OR+accident+OR+fire+OR+explosion+OR+flood+OR+crash)+-India+when:1d&hl=en&gl=US&ceid=US:en",
+    politics: gdeltFeed("(government OR parliament OR election OR president OR court) -India"),
+    sports: gdeltFeed("(sports OR football OR tennis OR Olympics) -India"),
+    business: gdeltFeed("(business OR economy OR market OR company OR inflation) -India"),
+    science: gdeltFeed("(science OR technology OR AI OR space OR cybersecurity) -India"),
+    entertainment: gdeltFeed("(actor OR film OR music OR entertainment) -India"),
+    tragedies: gdeltFeed("(earthquake OR accident OR fire OR explosion OR flood OR crash) -India"),
   },
 };
 
@@ -60,14 +66,14 @@ const directFeeds = [
     category: "politics",
     sourceName: "PIB India",
     sourceTier: "primary",
-    url: "https://pib.gov.in/RssMain.aspx",
+    url: "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=5",
   },
   {
     scope: "national",
     category: "business",
     sourceName: "RBI",
     sourceTier: "primary",
-    url: "https://www.rbi.org.in/pressreleases_rss.aspx",
+    url: "https://www.rbi.org.in/Scripts/rss.aspx",
   },
 ];
 
@@ -127,35 +133,6 @@ function normalizeImportance(value) {
   return Math.max(1, Math.min(10, Math.round(Number(value) / 10) || 1));
 }
 
-function isGoogleNewsUrl(url) {
-  try {
-    return new URL(url).hostname === "news.google.com";
-  } catch {
-    return false;
-  }
-}
-
-async function resolvePublisherUrl(url) {
-  if (!isGoogleNewsUrl(url)) return { url, status: "direct" };
-  try {
-    const result = await Promise.race([
-      googleDecoder.decode(url),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("google_url_resolution_timeout")), GOOGLE_RESOLUTION_TIMEOUT_MS)),
-    ]);
-    if (result.status && result.decoded_url) {
-      logPipeline("google_url_resolved", { wrapper_url: url, publisher_url: result.decoded_url });
-      return { url: result.decoded_url, status: "resolved" };
-    }
-    logPipeline("google_url_resolution_failed", { wrapper_url: url, reason: result.message || "unknown" });
-  } catch (error) {
-    logPipeline("google_url_resolution_failed", {
-      wrapper_url: url,
-      reason: error instanceof Error ? error.message : String(error),
-    });
-  }
-  return { url, status: "unresolved" };
-}
-
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 6000);
 }
@@ -194,13 +171,8 @@ function jsonLdArticleBodies(document) {
 }
 
 async function articleText(url, sourceTier) {
-  const resolved = await resolvePublisherUrl(url);
-  if (resolved.status === "unresolved") {
-    return { text: "", status: "rss_only", resolvedUrl: url, reason: "google_url_unresolved" };
-  }
-
   try {
-    const response = await fetch(resolved.url, {
+    const response = await fetch(url, {
       signal: AbortSignal.timeout(7000),
       redirect: "follow",
       headers: {
@@ -209,16 +181,16 @@ async function articleText(url, sourceTier) {
       },
     });
     if (!response.ok) {
-      return { text: "", status: "blocked", resolvedUrl: resolved.url, reason: `http_${response.status}` };
+      return { text: "", status: "blocked", resolvedUrl: url, reason: `http_${response.status}` };
     }
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("html") && !contentType.includes("json") && !contentType.includes("text")) {
-      return { text: "", status: "empty", resolvedUrl: resolved.url, reason: `unsupported_content_type:${contentType}` };
+      return { text: "", status: "empty", resolvedUrl: url, reason: `unsupported_content_type:${contentType}` };
     }
 
     const body = await response.text();
     const document = new JSDOM(body, {
-      url: response.url || resolved.url,
+      url: response.url || url,
       virtualConsole: jsdomVirtualConsole,
     }).window.document;
     const parsed = new Readability(document).parse();
@@ -231,22 +203,22 @@ async function articleText(url, sourceTier) {
     const words = text.split(/\s+/).filter(Boolean).length;
 
     if (!text || isBlockedOrBoilerplate(text)) {
-      return { text: "", status: "blocked", resolvedUrl: response.url || resolved.url, reason: "boilerplate_or_interstitial" };
+      return { text: "", status: "blocked", resolvedUrl: response.url || url, reason: "boilerplate_or_interstitial" };
     }
     if (words < MIN_SHORT_VALID_WORDS) {
-      return { text: "", status: "empty", resolvedUrl: response.url || resolved.url, reason: "insufficient_article_text" };
+      return { text: "", status: "empty", resolvedUrl: response.url || url, reason: "insufficient_article_text" };
     }
     return {
       text,
       status: words >= MIN_FULL_EXTRACTION_WORDS ? "full_extraction" : "short_but_valid",
-      resolvedUrl: response.url || resolved.url,
+      resolvedUrl: response.url || url,
       sourceTier,
     };
   } catch (error) {
     return {
       text: "",
       status: "blocked",
-      resolvedUrl: resolved.url,
+      resolvedUrl: url,
       reason: error instanceof Error ? error.message : String(error),
     };
   }
@@ -513,7 +485,7 @@ const feedDefinitions = [
   ...scopes.flatMap((scope) => categories.map((category) => ({
     scope,
     category,
-    sourceName: "Google News",
+    sourceName: "GDELT",
     sourceTier: "signal",
     url: feeds[scope][category],
   }))),
