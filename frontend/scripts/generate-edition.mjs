@@ -109,7 +109,11 @@ function limitWords(value, maxWords) {
 }
 
 function normalizeImportance(value) {
-  return Math.max(1, Math.min(10, Math.round(Number(value) / 10) || 1));
+  return Math.max(1, Math.min(10, Math.round(Number(value) * 10) || 1));
+}
+
+function normalizeRating(value) {
+  return Math.max(0, Math.min(1, Number.isFinite(Number(value)) ? Number(value) : 0));
 }
 
 function isGoogleNewsUrl(url) {
@@ -449,21 +453,22 @@ async function reviewWithNemotron(items) {
   const prompt = `You are the final news editor for the ${scope}/${category} section. The category means ${categoryGuidance[category]}. The scope means the event must happen ${scopeRule}, or directly concern that scope. Evaluate every article. Keep only meaningful, important events that actually happened AND clearly belong to the requested scope and category. If an article is about a different category or scope, mark keep=false. Remove opinion, promotion, and minor updates. Do not demand that a story be globally historic; a clearly consequential event for this section is sufficient. Use only the supplied article text. Preserve names, dates, numbers, scores and causes. Mark at least the single most important article as keep=true only when a supplied article genuinely belongs in this section. Never keep an article only because it is a headline. Return exactly one decision for every supplied index, including discarded articles. Return ONLY valid JSON with no markdown.
 
 For each item return one decision with this shape:
-{"index":0,"keep":true,"importance":95}
+{"index":0,"keep":true,"rating":0.87}
 
 ARTICLES:\n\n${items.map((item, index) => `INDEX: ${index}\nSCOPE: ${item.scope}\nCATEGORY: ${item.category}\nARTICLE TEXT: ${item.text}`).join("\n\n")}`;
+  const ratingPrompt = `${prompt}\nEvery rating must be a continuous numeric value from 0.0 to 1.0; decimals such as 0.1, 0.5, and 0.9 are valid. Use 1.0 for the strongest relevant story and 0.0 for irrelevant or unusable stories.`;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const retryInstruction = attempt === 1
       ? ""
-      : "\nYour previous response did not match the required schema. Retry and return every decision with exactly these fields: index, keep, importance.";
-    const decisions = await askNemotron(`${prompt}${retryInstruction}`, 4000);
+      : "\nYour previous response did not match the required schema. Retry and return every decision with exactly these fields: index, keep, rating.";
+    const decisions = await askNemotron(`${ratingPrompt}${retryInstruction}`, 4000);
     const validDecisions = decisions.filter((decision) =>
       Number.isInteger(decision.index) &&
       decision.index >= 0 &&
       decision.index < items.length &&
       typeof decision.keep === "boolean" &&
-      Number.isFinite(Number(decision.importance))
+      Number.isFinite(Number(decision.rating))
     );
     const uniqueDecisions = [...new Map(validDecisions.map((decision) => [decision.index, decision])).values()];
     if (uniqueDecisions.length === items.length) return uniqueDecisions;
@@ -602,6 +607,7 @@ for (const scope of scopes) {
       });
     });
     const reviewArticles = extractedArticles.filter((item) => item.text);
+    const reviewedArticles = [];
     const keptArticles = [];
     let keptCount = 0;
     let reviewBatchCount = 0;
@@ -618,8 +624,17 @@ for (const scope of scopes) {
           if (!item) continue;
           const reviewedArticle = {
             ...item,
-            importance: Number(decision.importance) || 0,
+            rating: normalizeRating(decision.rating),
           };
+          reviewedArticles.push(reviewedArticle);
+          logPipeline("story_reviewed", {
+            scope,
+            category,
+            title: item.title,
+            url: item.url,
+            rating: reviewedArticle.rating,
+            keep: decision.keep,
+          });
           if (decision.keep) {
             keptArticles.push(reviewedArticle);
           }
@@ -630,12 +645,25 @@ for (const scope of scopes) {
     }
 
     keptCount = keptArticles.length;
-    const candidates = keptArticles
-      .sort((a, b) => b.importance - a.importance)
+    let candidatePool = keptArticles;
+    if (!candidatePool.length && reviewedArticles.length) {
+      const highestRated = [...reviewedArticles].sort((a, b) => b.rating - a.rating)[0];
+      candidatePool = [highestRated];
+      console.warn(`No kept articles for ${scope}/${category}; using highest-rated story as category fallback (rating ${highestRated.rating})`);
+      logPipeline("category_fallback_selected", {
+        scope,
+        category,
+        title: highestRated.title,
+        url: highestRated.url,
+        rating: highestRated.rating,
+      });
+    }
+    const candidates = candidatePool
+      .sort((a, b) => b.rating - a.rating)
       .slice(0, maxPerCategory * 3);
     let eventGroups = candidates.map((article, index) => ({
       indices: [index],
-      importance: normalizeImportance(article.importance),
+      importance: normalizeImportance(article.rating),
     }));
     const headlineArticles = eventGroups;
     if (candidates.length > 1) {
@@ -655,6 +683,7 @@ for (const scope of scopes) {
           event_id: `${scope}-${category}-${eventIndex + 1}`,
           scope,
           category,
+          rating: Math.max(...eventArticles.map((article) => article.rating || 0)),
           importance: group.importance,
           sources: eventArticles.map((article) => article.url).filter(Boolean),
           facts: summary.facts,
@@ -667,6 +696,7 @@ for (const scope of scopes) {
           event_id: `${scope}-${category}-${eventIndex + 1}`,
           scope,
           category,
+          rating: Math.max(...eventArticles.map((article) => article.rating || 0)),
           importance: group.importance,
           source_count: eventArticles.length,
           sources: eventArticles.map((article) => article.url).filter(Boolean),
