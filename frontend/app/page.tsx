@@ -17,6 +17,8 @@ const scopes = [
   { key: "international", label: "INTERNATIONAL" },
 ];
 
+const CATEGORY_PREFERENCE_KEY = "minimum-times-visible-categories";
+
 function formatEditionDate(value: string) {
   const date = new Date(`${value}T00:00:00Z`);
   const weekday = new Intl.DateTimeFormat("en-IN", {
@@ -36,11 +38,27 @@ export default function Home() {
   const [visibleCategories, setVisibleCategories] = useState(
     sections.map((section) => section.key)
   );
+  const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [editionDate, setEditionDate] = useState("");
   const [loadedEditionDate, setLoadedEditionDate] = useState("");
   const [dateInput, setDateInput] = useState("");
   const [dateError, setDateError] = useState("");
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(CATEGORY_PREFERENCE_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        setVisibleCategories(
+          sections.map((section) => section.key).filter((key) => parsed.includes(key))
+        );
+      }
+    } catch {
+      // Ignore unavailable or malformed browser storage.
+    }
+  }, []);
 
   function openEvent(event: NewsEvent) {
     setSelectedEvent((selected) =>
@@ -49,7 +67,22 @@ export default function Home() {
   }
 
   function toggleCategory(category: string) {
-    setVisibleCategories((current) =>
+    setVisibleCategories((current) => {
+      const next = current.includes(category)
+        ? current.filter((item) => item !== category)
+        : [...current, category];
+      try {
+        window.localStorage.setItem(CATEGORY_PREFERENCE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore unavailable browser storage.
+      }
+      return next;
+    });
+    setSelectedEvent(null);
+  }
+
+  function toggleCollapsedCategory(category: string) {
+    setCollapsedCategories((current) =>
       current.includes(category)
         ? current.filter((item) => item !== category)
         : [...current, category]
@@ -105,11 +138,12 @@ export default function Home() {
   const theme = darkMode
     ? "bg-black text-white"
     : "bg-white text-black";
+  const editionDescription = editionDate ? formatEditionDate(editionDate) : "today’s edition";
 
   if (news === null && !error) {
     return (
       <main className={`min-h-screen flex items-center justify-center ${theme}`}>
-        <p className="text-gray-500">Loading today’s edition...</p>
+        <p className="text-gray-500">Loading {editionDescription}...</p>
       </main>
     );
   }
@@ -118,7 +152,7 @@ export default function Home() {
     return (
       <main className={`min-h-screen flex items-center justify-center px-6 ${theme}`}>
         <div className="text-center">
-          <h1 className="text-2xl font-bold">Today’s edition is unavailable</h1>
+          <h1 className="text-2xl font-bold">{editionDescription} is unavailable</h1>
           <p className="text-red-400 mt-3">{error}</p>
         </div>
       </main>
@@ -143,18 +177,22 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setDarkMode((value) => !value)}
-                className={`border px-3 py-2 text-xs font-semibold ${
+                aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+                title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+                className={`border px-3 py-2 text-lg leading-none transition ${
                   darkMode
                     ? "border-gray-700 text-gray-300 hover:bg-gray-900"
                     : "border-gray-300 text-gray-700 hover:bg-gray-100"
                 }`}
               >
-                {darkMode ? "LIGHT MODE" : "DARK MODE"}
+                {darkMode ? "☾" : "☀"}
               </button>
               <button
                 type="button"
                 onClick={() => setExtremeMode((value) => !value)}
-                className={`border px-3 py-2 text-xs font-semibold ${
+                aria-label={extremeMode ? "Switch to normal summaries" : "Switch to extreme summaries"}
+                title={extremeMode ? "Switch to normal summaries" : "Switch to extreme summaries"}
+                className={`border px-3 py-2 text-lg leading-none transition ${
                   extremeMode
                     ? darkMode
                       ? "border-white bg-white text-black"
@@ -164,7 +202,7 @@ export default function Home() {
                       : "border-gray-300 text-gray-700 hover:bg-gray-100"
                 }`}
               >
-                {extremeMode ? "NORMAL MODE" : "EXTREME MODE"}
+                ⚡
               </button>
             </div>
           </div>
@@ -301,7 +339,15 @@ export default function Home() {
                 <div className="mt-4 flex gap-3 text-xs font-semibold">
                   <button
                     type="button"
-                    onClick={() => setVisibleCategories(sections.map((section) => section.key))}
+                    onClick={() => {
+                      const next = sections.map((section) => section.key);
+                      setVisibleCategories(next);
+                      try {
+                        window.localStorage.setItem(CATEGORY_PREFERENCE_KEY, JSON.stringify(next));
+                      } catch {
+                        // Ignore unavailable browser storage.
+                      }
+                    }}
                     className="underline"
                   >
                     SELECT ALL
@@ -310,6 +356,11 @@ export default function Home() {
                     type="button"
                     onClick={() => {
                       setVisibleCategories([]);
+                      try {
+                        window.localStorage.setItem(CATEGORY_PREFERENCE_KEY, JSON.stringify([]));
+                      } catch {
+                        // Ignore unavailable browser storage.
+                      }
                       setSelectedEvent(null);
                     }}
                     className="underline"
@@ -337,10 +388,18 @@ export default function Home() {
               return (
                 <div key={`${scope.key}-${section.key}`} className="mb-10">
                   <h3 className="text-xl font-bold border-b border-gray-700 pb-3 mb-2">
-                    {section.label}
+                    <button
+                      type="button"
+                      aria-expanded={!collapsedCategories.includes(section.key)}
+                      onClick={() => toggleCollapsedCategory(section.key)}
+                      className="flex w-full items-center justify-between text-left"
+                    >
+                      <span>{section.label}</span>
+                      <span aria-hidden="true">{collapsedCategories.includes(section.key) ? "＋" : "−"}</span>
+                    </button>
                   </h3>
 
-                  {events.length === 0 ? (
+                  {collapsedCategories.includes(section.key) ? null : events.length === 0 ? (
                     <p className="text-gray-600 py-4">No major news.</p>
                   ) : (
                     events.map((event) => (
@@ -378,6 +437,22 @@ export default function Home() {
                             >
                               {event.details}
                             </p>
+                            {event.sources.length > 0 && (
+                              <div className="mt-5 border-t border-gray-800 pt-4 text-sm">
+                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                                  Source articles
+                                </p>
+                                <ul className="space-y-1">
+                                  {event.sources.map((source, index) => (
+                                    <li key={`${event.id}-source-${index}`}>
+                                      <a href={source} target="_blank" rel="noreferrer" className="underline hover:text-current">
+                                        Read source {index + 1}
+                                      </a>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

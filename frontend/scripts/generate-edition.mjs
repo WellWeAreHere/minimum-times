@@ -491,9 +491,11 @@ async function summarizeEventWithNemotron(items, importance) {
   const sportsInstruction = items[0].category === "sports"
     ? `For sports, facts MUST include these exact keys: sport, match, teams, result, score, top_performer, key_event. Do not reduce a match to a generic victory. Include margin, target, overs, scores, performers, and decisive moments when supplied.`
     : "For non-sports, facts should contain the most useful concrete names, decisions, numbers, locations, or consequences supplied by the reports.";
-  const prompt = `You are a concise event editor. Combine the supplied reports about ONE real-world event. Use only the supplied text; do not invent facts or use outside knowledge. Prefer facts repeated or clearly stated by sources. ${sportsInstruction}
+  const prompt = `You are a concise, neutral news editor. Combine the supplied reports about ONE real-world event. Use only the supplied text; do not invent facts or use outside knowledge. Prefer facts repeated or clearly stated by sources. Never mention publishers, websites, reports, articles, or sources in the summaries unless that attribution is itself the news. Never begin with meta language such as "This article covers", "According to the report", or "The article states". Begin directly with the event and its facts. Write as a finished news summary, not as commentary, analysis, a description of the writing task, or a full article. ${sportsInstruction}
 
-For micro_summary, write one complete, standalone sentence in at most 10 words. It must name the main subject and state the key action, result, or event. Use fewer words when needed. Never output a fragment, a sentence beginning with a pronoun, a dangling phrase, or a clipped sentence. Include the most important concrete number or score when one is supplied and can fit. Check that the sentence still makes sense on its own before returning it.
+For micro_summary, write the shortest physically possible complete and understandable news sentence. Do not use a fixed word limit. It must name the main subject and state the key action, result, or event. Never output a fragment, a sentence beginning with a pronoun, a dangling phrase, or a clipped sentence. Include the most important concrete number or score when one is supplied and can fit.
+
+For summary, write a concise standalone news summary. Do not use a fixed word limit, but stop as soon as the essential event, action, result, and concrete facts are clear. Do not expand it into an article, backgrounder, analysis, or commentary.
 
 Return ONLY valid JSON with this exact structure:
 {"facts":{"key":"value"},"summary":"maximum 30 words","micro_summary":"maximum 10 words","extended_summary":"100-150 factual words"}
@@ -513,8 +515,8 @@ REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${it
   }
   return {
     facts,
-    summary: limitWords(summary.summary, 30),
-    micro_summary: limitWords(summary.micro_summary, 10),
+    summary: String(summary.summary).trim(),
+    micro_summary: String(summary.micro_summary).trim(),
     extended_summary: limitWords(summary.extended_summary, 150),
   };
 }
@@ -595,8 +597,8 @@ async function buildEventsIncrementally(scope, category, articles) {
         const firstArticle = event.articles[0];
         summary = {
           facts: {},
-          summary: limitWords(firstArticle.title, 30),
-          micro_summary: limitWords(firstArticle.title, 10),
+          summary: firstArticle.title.trim(),
+          micro_summary: firstArticle.title.trim(),
           extended_summary: limitWords(firstArticle.text, 150),
         };
       }
@@ -647,6 +649,78 @@ ${events.map((event, index) => `EVENT_INDEX: ${index}\nSUMMARY: ${event.summary}
     rating: ratingByIndex.has(index) ? ratingByIndex.get(index) : 0.5,
     rating_source: ratingByIndex.has(index) ? "ai" : "rating_fallback",
   }));
+}
+
+async function deduplicateFinalEventsWithNemotron(events) {
+  if (events.length < 2) return events;
+
+  const groupsByBucket = new Map();
+  events.forEach((event, index) => {
+    const bucket = `${event.scope}/${event.category}`;
+    if (!groupsByBucket.has(bucket)) groupsByBucket.set(bucket, []);
+    groupsByBucket.get(bucket).push({ event, index });
+  });
+
+  const deduplicated = [];
+  for (const [bucket, entries] of groupsByBucket) {
+    if (entries.length < 2) {
+      deduplicated.push(entries[0].event);
+      continue;
+    }
+
+    const prompt = `You are performing the final duplicate check for the ${bucket} news section. Group events only when they describe the same real-world event. Events about the same topic, person, company, sport, or conflict but different incidents must remain separate. Every supplied index must appear exactly once in one group. Return ONLY valid JSON.
+
+Return this shape:
+{"groups":[{"indices":[0,1]}]}
+
+EVENTS:\n\n${entries.map(({ event }, index) => `INDEX: ${index}\nSUMMARY: ${event.summary}\nDETAILS: ${event.extended_summary}\nSOURCES: ${event.sources.join(", ")}`).join("\n\n")}`;
+
+    let groups;
+    try {
+      const response = await askNemotron(prompt, 2500, "object");
+      const assigned = new Set();
+      groups = [];
+      for (const group of Array.isArray(response?.groups) ? response.groups : []) {
+        const indices = [...new Set(
+          (Array.isArray(group.indices) ? group.indices : [])
+            .filter((index) => Number.isInteger(index) && index >= 0 && index < entries.length && !assigned.has(index))
+        )];
+        if (!indices.length) continue;
+        indices.forEach((index) => assigned.add(index));
+        groups.push(indices);
+      }
+      entries.forEach((_entry, index) => {
+        if (!assigned.has(index)) groups.push([index]);
+      });
+    } catch (error) {
+      console.warn(`Final event deduplication failed for ${bucket}: ${error.message}; retaining events`);
+      groups = entries.map((_entry, index) => [index]);
+    }
+
+    for (const indices of groups) {
+      const groupedEvents = indices.map((index) => entries[index].event);
+      const representative = [...groupedEvents].sort((left, right) =>
+        (right.rating ?? 0) - (left.rating ?? 0)
+      )[0];
+      const mergedSources = [...new Set(groupedEvents.flatMap((event) => event.sources || []))];
+      deduplicated.push({
+        ...representative,
+        sources: mergedSources,
+        facts: groupedEvents.reduce((facts, event) => ({ ...facts, ...(event.facts || {}) }), {}),
+      });
+      if (groupedEvents.length > 1) {
+        logPipeline("final_duplicate_events_merged", {
+          scope: representative.scope,
+          category: representative.category,
+          event_ids: groupedEvents.map((event) => event.event_id),
+          retained_event_id: representative.event_id,
+          sources: mergedSources,
+        });
+      }
+    }
+  }
+
+  return deduplicated;
 }
 
 async function saveEdition(date, payload) {
@@ -754,10 +828,13 @@ for (const scope of scopes) {
         extraction_reason: item.extractionReason,
       });
     });
-    const fullArticles = extractedArticles.filter((item) => item.extractionStatus === "full_extraction");
+    const usableArticles = extractedArticles.filter((item) =>
+      item.extractionStatus === "full_extraction" || item.extractionStatus === "short_but_valid"
+    );
+    const fullArticles = usableArticles;
     let events = [];
     try {
-      events = await buildEventsIncrementally(scope, category, fullArticles);
+      events = await buildEventsIncrementally(scope, category, usableArticles);
       events = await rateEventsWithNemotron(scope, category, events);
     } catch (error) {
       console.warn(`Event pipeline failed for ${scope}/${category}: ${error.message}`);
@@ -794,9 +871,10 @@ for (const scope of scopes) {
 }
 
 const payload = { national: {}, international: {} };
+const finalSelected = await deduplicateFinalEventsWithNemotron(selected);
 for (const scope of scopes) {
   for (const category of categories) {
-    const categoryEvents = selected
+    const categoryEvents = finalSelected
       .filter((item) => item.scope === scope && item.category === category)
       .sort((a, b) => b.importance - a.importance)
       .slice(0, maxPerCategory);

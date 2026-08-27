@@ -22,3 +22,12 @@
 - [x] Reduce the final Nemotron keep/discard review batch size from 5 articles to 3 articles per request.
 - [x] Keep the current 6,000-character article-text limit; it provides enough context for review while controlling prompt size.
 - [x] Create category-specific Nemotron review prompts with concrete facts and rejection of vague or promotional summaries.
+- [x] Make extreme-mode summaries as short as physically possible without imposing a fixed 10-word limit; instruct the AI to preserve a complete, understandable statement.
+- [x] Revise the event-summary prompt to omit publisher names and source-attribution phrasing unless essential, consistently write in a direct, neutral news-editor voice, and forbid meta introductions such as “This article covers…”; begin directly with the event and its facts.
+- [x] Make category headings clickable toggles so readers can collapse or expand a category after reading it.
+- [x] Append the source articles for each event as clickable links at the end of its extended summary.
+- [x] Remove the fixed 30-word limit for regular summaries while instructing the AI to produce a concise news summary rather than a full article or commentary.
+- [x] Replace the LIGHT MODE text control with an aesthetic moon-icon theme button, with an appropriate accessible label and tooltip.
+- [x] Make the EXTREME MODE control aesthetic with a lightning-bolt icon, while keeping its purpose clear and accessible.
+- [x] Update loading and error states for historical edition dates so they do not refer to “today’s edition.”
+- [x] Persist category visibility preferences in browser storage so deselected categories remain deselected after reloads and revisits.
