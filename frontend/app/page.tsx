@@ -18,6 +18,12 @@ const scopes = [
 ];
 
 const CATEGORY_PREFERENCE_KEY = "minimum-times-visible-categories";
+const EXTREME_MODE_PREFERENCE_KEY = "minimum-times-extreme-mode";
+const TEXT_SCALE_PREFERENCE_KEY = "minimum-times-text-scale";
+const DEFAULT_TEXT_SCALE = 1;
+const MIN_TEXT_SCALE = 0.85;
+const MAX_TEXT_SCALE = 1.3;
+const TEXT_SCALE_STEP = 0.1;
 
 function formatEditionDate(value: string) {
   const date = new Date(`${value}T00:00:00Z`);
@@ -34,7 +40,8 @@ export default function Home() {
   const [selectedEvent, setSelectedEvent] = useState<NewsEvent | null>(null);
   const [darkMode, setDarkMode] = useState(true);
   const [selectedScope, setSelectedScope] = useState("national");
-  const [extremeMode, setExtremeMode] = useState(false);
+  const [extremeMode, setExtremeMode] = useState(true);
+  const [textScale, setTextScale] = useState(DEFAULT_TEXT_SCALE);
   const [visibleCategories, setVisibleCategories] = useState(
     sections.map((section) => section.key)
   );
@@ -46,19 +53,70 @@ export default function Home() {
   const [dateError, setDateError] = useState("");
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(CATEGORY_PREFERENCE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        setVisibleCategories(
-          sections.map((section) => section.key).filter((key) => parsed.includes(key))
-        );
+    const restoreCategories = window.setTimeout(() => {
+      try {
+        const stored = window.localStorage.getItem(CATEGORY_PREFERENCE_KEY);
+        if (!stored) return;
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setVisibleCategories(
+            sections.map((section) => section.key).filter((key) => parsed.includes(key))
+          );
+        }
+      } catch {
+        // Ignore unavailable or malformed browser storage.
       }
-    } catch {
-      // Ignore unavailable or malformed browser storage.
-    }
+    }, 0);
+
+    return () => window.clearTimeout(restoreCategories);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${textScale * 100}%`;
+    return () => {
+      document.documentElement.style.fontSize = "";
+    };
+  }, [textScale]);
+
+  useEffect(() => {
+    const restorePreferences = window.setTimeout(() => {
+      try {
+        const storedExtremeMode = window.localStorage.getItem(EXTREME_MODE_PREFERENCE_KEY);
+        if (storedExtremeMode !== null) setExtremeMode(storedExtremeMode === "true");
+
+        const storedTextScale = Number(window.localStorage.getItem(TEXT_SCALE_PREFERENCE_KEY));
+        if (Number.isFinite(storedTextScale)) {
+          setTextScale(Math.min(MAX_TEXT_SCALE, Math.max(MIN_TEXT_SCALE, storedTextScale)));
+        }
+      } catch {
+        // Ignore unavailable or malformed browser storage.
+      }
+    }, 0);
+
+    return () => window.clearTimeout(restorePreferences);
+  }, []);
+
+  function updateTextScale(nextScale: number) {
+    const next = Math.min(MAX_TEXT_SCALE, Math.max(MIN_TEXT_SCALE, nextScale));
+    setTextScale(next);
+    try {
+      window.localStorage.setItem(TEXT_SCALE_PREFERENCE_KEY, String(next));
+    } catch {
+      // Ignore unavailable browser storage.
+    }
+  }
+
+  function toggleExtremeMode() {
+    setExtremeMode((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(EXTREME_MODE_PREFERENCE_KEY, String(next));
+      } catch {
+        // Ignore unavailable browser storage.
+      }
+      return next;
+    });
+  }
 
   function openEvent(event: NewsEvent) {
     setSelectedEvent((selected) =>
@@ -165,21 +223,23 @@ export default function Home() {
         <header className="mb-14">
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">MINIMUM TIMES</h1>
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <p className={`${darkMode ? "text-gray-400" : "text-gray-600"} mt-2 min-w-0`}>
-              The minimum news you need.
-            </p>
-            {loadedEditionDate && (
-              <p className={`${darkMode ? "text-gray-500" : "text-gray-500"} mt-2 text-xs uppercase tracking-wide`}>
-                {formatEditionDate(loadedEditionDate)}
+            <div className="min-w-0">
+              <p className={`${darkMode ? "text-gray-400" : "text-gray-600"} mt-2`}>
+                The minimum news you need.
               </p>
-            )}
+              {loadedEditionDate && (
+                <p className={`${darkMode ? "text-gray-500" : "text-gray-500"} mt-2 text-xs uppercase tracking-wide`}>
+                  {formatEditionDate(loadedEditionDate)}
+                </p>
+              )}
+            </div>
             <div className="flex max-w-full flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setDarkMode((value) => !value)}
                 aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
                 title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-                className={`border px-3 py-2 text-lg leading-none transition ${
+                className={`min-h-11 min-w-11 border px-3 py-2 text-lg leading-none transition ${
                   darkMode
                     ? "border-gray-700 text-gray-300 hover:bg-gray-900"
                     : "border-gray-300 text-gray-700 hover:bg-gray-100"
@@ -189,10 +249,10 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={() => setExtremeMode((value) => !value)}
+                onClick={toggleExtremeMode}
                 aria-label={extremeMode ? "Switch to normal summaries" : "Switch to extreme summaries"}
                 title={extremeMode ? "Switch to normal summaries" : "Switch to extreme summaries"}
-                className={`border px-3 py-2 text-lg leading-none transition ${
+                className={`min-h-11 min-w-11 border px-3 py-2 text-lg leading-none transition ${
                   extremeMode
                     ? darkMode
                       ? "border-white bg-white text-black"
@@ -203,6 +263,48 @@ export default function Home() {
                 }`}
               >
                 ⚡
+              </button>
+              <button
+                type="button"
+                onClick={() => updateTextScale(textScale - TEXT_SCALE_STEP)}
+                disabled={textScale <= MIN_TEXT_SCALE}
+                aria-label="Decrease text size"
+                title="Decrease text size"
+                className={`min-h-11 min-w-11 border px-3 py-2 text-sm font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  darkMode
+                    ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                A−
+              </button>
+              <button
+                type="button"
+                onClick={() => updateTextScale(textScale + TEXT_SCALE_STEP)}
+                disabled={textScale >= MAX_TEXT_SCALE}
+                aria-label="Increase text size"
+                title="Increase text size"
+                className={`min-h-11 min-w-11 border px-3 py-2 text-sm font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  darkMode
+                    ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                A+
+              </button>
+              <button
+                type="button"
+                onClick={() => updateTextScale(DEFAULT_TEXT_SCALE)}
+                disabled={textScale === DEFAULT_TEXT_SCALE}
+                aria-label="Reset text size"
+                title="Reset text size"
+                className={`min-h-11 border px-3 py-2 text-xs font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  darkMode
+                    ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                RESET
               </button>
             </div>
           </div>

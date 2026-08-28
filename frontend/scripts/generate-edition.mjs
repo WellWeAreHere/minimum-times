@@ -17,6 +17,8 @@ const feedAttempts = 2;
 const FEED_TIMEOUT_MS = 30000;
 const FEED_CONCURRENCY = 3;
 const EVENT_PUBLISH_THRESHOLD = 0.6;
+const PREVIOUS_EVENT_SIMILARITY_THRESHOLD = 0.8;
+const PREVIOUS_EVENT_COMPARISON_CONCURRENCY = 3;
 const MIN_SHORT_VALID_WORDS = 40;
 const MIN_FULL_EXTRACTION_WORDS = 120;
 const GOOGLE_RESOLUTION_TIMEOUT_MS = 15000;
@@ -316,8 +318,8 @@ async function runFeedTasks(tasks) {
   return results;
 }
 
-async function loadPreviousEdition(date) {
-  const endpoint = `${process.env.SUPABASE_URL}/rest/v1/editions?status=eq.published&edition_date=lt.${date}&select=payload&order=edition_date.desc&limit=1`;
+async function loadPreviousEditions(date) {
+  const endpoint = `${process.env.SUPABASE_URL}/rest/v1/editions?status=eq.published&edition_date=lt.${date}&select=edition_date,payload&order=edition_date.desc&limit=2`;
   try {
     const response = await fetch(endpoint, {
       headers: {
@@ -327,15 +329,18 @@ async function loadPreviousEdition(date) {
     });
     if (!response.ok) throw new Error(`Supabase returned ${response.status}`);
     const rows = await response.json();
-    const payload = rows[0]?.payload;
-    return scopes.flatMap((scope) =>
-      categories.flatMap((category) =>
-        (payload?.[scope]?.[category] || []).map((event) => ({
-          scope,
-          category,
-          title: event.summary || event.short_summary || event.title || "",
-          url: event.sources?.[0] || event.url || "",
-        }))
+    return rows.flatMap((row) =>
+      scopes.flatMap((scope) =>
+        categories.flatMap((category) =>
+          (row.payload?.[scope]?.[category] || []).map((event) => ({
+            editionDate: row.edition_date,
+            scope,
+            category,
+            summary: event.summary || event.short_summary || event.title || "",
+            facts: event.facts && typeof event.facts === "object" ? event.facts : {},
+            sources: Array.isArray(event.sources) ? event.sources : [],
+          }))
+        )
       )
     );
   } catch (error) {
@@ -498,7 +503,7 @@ For micro_summary, write the shortest physically possible complete and understan
 For summary, write a concise standalone news summary. Do not use a fixed word limit, but stop as soon as the essential event, action, result, and concrete facts are clear. Do not expand it into an article, backgrounder, analysis, or commentary.
 
 Return ONLY valid JSON with this exact structure:
-{"facts":{"key":"value"},"summary":"maximum 30 words","micro_summary":"maximum 10 words","extended_summary":"100-150 factual words"}
+{"facts":{"key":"value"},"summary":"concise standalone summary","micro_summary":"short complete summary","extended_summary":"100-150 factual words"}
 
 CATEGORY: ${items[0].category}
 EVENT IMPORTANCE: ${importance}/10
@@ -524,8 +529,7 @@ REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${it
 async function classifyArticlesIntoEventsWithNemotron(scope, category, articles, events) {
   const existingEvents = events.map((event) => ({
     event_id: event.event_id,
-    summary: event.summary,
-    micro_summary: event.micro_summary,
+    article_titles: event.articles.map((article) => article.title).slice(0, 3),
     sources: event.sources,
   }));
   const prompt = `You are maintaining the ${scope}/${category} news event list. For each new article, decide whether it belongs to one existing event or starts a new event. Articles belong together only when they describe the same real-world event, not merely the same topic. Return one assignment for every article. Use an existing event_id exactly when matching; otherwise use a unique value beginning with new_. Return ONLY valid JSON.
@@ -585,41 +589,43 @@ async function buildEventsIncrementally(scope, category, articles) {
           event_id: `${scope}-${category}-${nextEventNumber++}`,
           articles: [],
           sources: [],
+          scope,
+          category,
         };
         events.push(event);
       }
       event.articles.push(...assignedArticles);
-      let summary;
-      try {
-        summary = await summarizeEventWithNemotron(event.articles, 5);
-      } catch (error) {
-        console.warn(`Event summary failed for ${scope}/${category}: ${error.message}; using extracted article fallback`);
-        const firstArticle = event.articles[0];
-        summary = {
-          facts: {},
-          summary: firstArticle.title.trim(),
-          micro_summary: firstArticle.title.trim(),
-          extended_summary: limitWords(firstArticle.text, 150),
-        };
-      }
+      event.sources = [...new Set(event.articles.map((article) => article.url).filter(Boolean))];
+      event.timestamp = event.articles.map((article) => article.published).find(Boolean) || "";
+    }
+  }
+
+  // Summarize only after all batches have been grouped, so each event is summarized once.
+  await Promise.all(events.map(async (event) => {
+    try {
+      const summary = await summarizeEventWithNemotron(event.articles, 5);
       event.facts = summary.facts;
       event.summary = summary.summary;
       event.micro_summary = summary.micro_summary;
       event.extended_summary = summary.extended_summary;
-      event.sources = [...new Set(event.articles.map((article) => article.url).filter(Boolean))];
-      event.timestamp = event.articles.map((article) => article.published).find(Boolean) || "";
-      event.scope = scope;
-      event.category = category;
-      logPipeline("event_updated", {
-        event_id: event.event_id,
-        scope,
-        category,
-        article_count: event.articles.length,
-        sources: event.sources,
-        summary: event.summary,
-      });
+    } catch (error) {
+      console.warn(`Event summary failed for ${scope}/${category}: ${error.message}; using extracted article fallback`);
+      const firstArticle = event.articles[0];
+      event.facts = {};
+      event.summary = firstArticle.title.trim();
+      event.micro_summary = firstArticle.title.trim();
+      event.extended_summary = limitWords(firstArticle.text, 150);
     }
-  }
+    logPipeline("event_updated", {
+      event_id: event.event_id,
+      scope,
+      category,
+      article_count: event.articles.length,
+      sources: event.sources,
+      summary: event.summary,
+    });
+  }));
+
   return events;
 }
 
@@ -723,6 +729,94 @@ EVENTS:\n\n${entries.map(({ event }, index) => `INDEX: ${index}\nSUMMARY: ${even
   return deduplicated;
 }
 
+async function compareEventsWithPreviousWithNemotron(entries, previousEntries) {
+  const prompt = `You are checking whether newly selected news events repeat events from the last two editions. Compare structured facts first, using the summary only as supporting context. Match only the same real-world event, not the same person, topic, company, sport, conflict, or ongoing issue when the incident is different. Return the highest similarity for every new event. Use a continuous value from 0.0 to 1.0. Return ONLY valid JSON.
+
+Return this shape:
+{"comparisons":[{"event_index":0,"similarity":0.87,"previous_edition_date":"2026-08-27","previous_event_index":1}]}
+
+NEW EVENTS:
+${entries.map(({ event }, index) => `NEW_EVENT_INDEX: ${index}\nFACTS: ${JSON.stringify(event.facts || {})}\nSUMMARY: ${event.summary}`).join("\n\n")}
+
+PREVIOUS EVENTS:
+${previousEntries.map((event, index) => `PREVIOUS_EVENT_INDEX: ${index}\nEDITION_DATE: ${event.editionDate}\nFACTS: ${JSON.stringify(event.facts || {})}\nSUMMARY: ${event.summary}`).join("\n\n")}`;
+
+  const response = await askNemotron(prompt, 2500, "object");
+  const comparisons = Array.isArray(response?.comparisons) ? response.comparisons : [];
+  return comparisons
+    .map((item) => ({
+      eventIndex: Number(item.event_index),
+      similarity: normalizeRating(item.similarity),
+      previousEditionDate: String(item.previous_edition_date || ""),
+      previousEventIndex: Number(item.previous_event_index),
+    }))
+    .filter((item) => Number.isInteger(item.eventIndex) && item.eventIndex >= 0 && item.eventIndex < entries.length)
+    .filter((item, index, values) => values.findIndex((candidate) => candidate.eventIndex === item.eventIndex) === index);
+}
+
+async function filterRepeatedEventsFromPreviousEditions(events, previousEvents) {
+  if (!events.length || !previousEvents.length) return events;
+
+  const buckets = new Map();
+  events.forEach((event) => {
+    const bucket = `${event.scope}/${event.category}`;
+    if (!buckets.has(bucket)) buckets.set(bucket, { entries: [], previousEntries: [] });
+    buckets.get(bucket).entries.push({ event });
+  });
+  previousEvents.forEach((event) => {
+    const bucket = `${event.scope}/${event.category}`;
+    if (!buckets.has(bucket)) buckets.set(bucket, { entries: [], previousEntries: [] });
+    buckets.get(bucket).previousEntries.push(event);
+  });
+
+  const tasks = [...buckets.entries()]
+    .filter(([, bucket]) => bucket.entries.length && bucket.previousEntries.length)
+    .map(([bucket, value]) => ({ bucket, ...value }));
+  const results = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex++;
+      const task = tasks[index];
+      try {
+        results[index] = {
+          task,
+          comparisons: await compareEventsWithPreviousWithNemotron(task.entries, task.previousEntries),
+        };
+      } catch (error) {
+        console.warn(`Previous-edition comparison failed for ${task.bucket}: ${error.message}; retaining events`);
+        results[index] = { task, comparisons: [] };
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(PREVIOUS_EVENT_COMPARISON_CONCURRENCY, tasks.length) }, () => worker())
+  );
+
+  const discarded = new Set();
+  results.forEach(({ task, comparisons }) => {
+    comparisons.forEach((comparison) => {
+      if (comparison.similarity < PREVIOUS_EVENT_SIMILARITY_THRESHOLD) return;
+      const event = task.entries[comparison.eventIndex]?.event;
+      if (!event) return;
+      discarded.add(event.event_id);
+      logPipeline("previous_event_discarded", {
+        event_id: event.event_id,
+        scope: event.scope,
+        category: event.category,
+        similarity: comparison.similarity,
+        threshold: PREVIOUS_EVENT_SIMILARITY_THRESHOLD,
+        previous_edition_date: comparison.previousEditionDate,
+        previous_event_index: comparison.previousEventIndex,
+      });
+    });
+  });
+
+  return events.filter((event) => !discarded.has(event.event_id));
+}
+
 async function saveEdition(date, payload) {
   const endpoint = `${process.env.SUPABASE_URL}/rest/v1/editions?on_conflict=edition_date`;
   const response = await fetch(endpoint, {
@@ -744,7 +838,7 @@ async function saveEdition(date, payload) {
 }
 
 const today = new Date().toISOString().slice(0, 10);
-const previousEditionArticles = await loadPreviousEdition(today);
+const previousEditionEvents = await loadPreviousEditions(today);
 const feedDefinitions = [
   ...scopes.flatMap((scope) => categories.map((category) => ({
     scope,
@@ -780,15 +874,10 @@ for (const scope of scopes) {
     const fetchedArticles = articles.filter(
       (item) => item.scope === scope && item.category === category
     );
-    const previousMatches = fetchedArticles.filter((item) =>
-      previousEditionArticles.some((previous) =>
-        previous.scope === scope && previous.category === category && sameStory(item, previous)
-      )
-    );
-    const categoryArticles = fetchedArticles.filter((item) => !previousMatches.includes(item));
+    const categoryArticles = fetchedArticles;
 
     if (!categoryArticles.length) {
-      console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${previousMatches.length} similar to previous edition → 0 new → 0 deduplicated → 0 reviewed → 0 kept`);
+      console.log(`${scope}/${category}: 0 fetched → 0 candidates → 0 extracted → 0 events → 0 selected`);
       continue;
     }
 
@@ -866,12 +955,16 @@ for (const scope of scopes) {
       });
     });
 
-    console.log(`${scope}/${category}: ${fetchedArticles.length} fetched â†’ ${previousMatches.length} similar to previous edition â†’ ${categoryArticles.length} new â†’ ${fullArticles.length} full extracts â†’ ${events.length} events â†’ ${publishedEvents.length} published`);
+    console.log(`${scope}/${category}: ${fetchedArticles.length} fetched → ${categoryArticles.length} candidates → ${fullArticles.length} extracted → ${events.length} events → ${publishedEvents.length} selected`);
   }
 }
 
 const payload = { national: {}, international: {} };
-const finalSelected = await deduplicateFinalEventsWithNemotron(selected);
+const finalDeduplicated = await deduplicateFinalEventsWithNemotron(selected);
+const finalSelected = await filterRepeatedEventsFromPreviousEditions(
+  finalDeduplicated,
+  previousEditionEvents
+);
 for (const scope of scopes) {
   for (const category of categories) {
     const categoryEvents = finalSelected

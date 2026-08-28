@@ -31,3 +31,8 @@
 - [x] Make the EXTREME MODE control aesthetic with a lightning-bolt icon, while keeping its purpose clear and accessible.
 - [x] Update loading and error states for historical edition dates so they do not refer to “today’s edition.”
 - [x] Persist category visibility preferences in browser storage so deselected categories remain deselected after reloads and revisits.
+- [x] Move previous-edition filtering to after final event deduplication: compare each new event's structured facts against events from the last two published editions in the same scope and category, calculate a similarity rating, and discard events whose similarity exceeds a configurable threshold before saving the edition.
+- [x] Add mobile-friendly text-size controls beside the header controls: accessible A− and A+ buttons with an optional Reset button, 44px minimum touch targets, 85%–130% bounds in 10% increments, localStorage persistence, and native pinch-to-zoom support.
+- [x] Make Extreme Mode enabled by default, and persist the user's choice in browser storage when they switch between Extreme Mode and normal summaries.
+- [x] Eliminate repeated event summarization: separate event classification/grouping from summarization, classify all article batches first, summarize each completed event exactly once after grouping, use compact article titles/source URLs for existing-event context, and summarize independent events with controlled concurrency.
+- [x] Make the Dark Mode and Extreme Mode buttons identical in size, padding, alignment, and touch target dimensions.
