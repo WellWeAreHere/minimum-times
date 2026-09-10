@@ -16,7 +16,7 @@ const maxPerCategory = 4;
 const feedAttempts = 2;
 const FEED_TIMEOUT_MS = 30000;
 const FEED_CONCURRENCY = 3;
-const EVENT_PUBLISH_THRESHOLD = 0.6;
+const EVENT_PUBLISH_THRESHOLD = 0.5;
 const PREVIOUS_EVENT_SIMILARITY_THRESHOLD = 0.8;
 const PREVIOUS_EVENT_COMPARISON_CONCURRENCY = 3;
 const MIN_SHORT_VALID_WORDS = 40;
@@ -496,9 +496,9 @@ async function summarizeEventWithNemotron(items, importance) {
   const sportsInstruction = items[0].category === "sports"
     ? `For sports, facts MUST include these exact keys: sport, match, teams, result, score, top_performer, key_event. Do not reduce a match to a generic victory. Include margin, target, overs, scores, performers, and decisive moments when supplied.`
     : "For non-sports, facts should contain the most useful concrete names, decisions, numbers, locations, or consequences supplied by the reports.";
-  const prompt = `You are a concise, neutral news editor. Combine the supplied reports about ONE real-world event. Use only the supplied text; do not invent facts or use outside knowledge. Prefer facts repeated or clearly stated by sources. Never mention publishers, websites, reports, articles, or sources in the summaries unless that attribution is itself the news. Never begin with meta language such as "This article covers", "According to the report", or "The article states". Begin directly with the event and its facts. Write as a finished news summary, not as commentary, analysis, a description of the writing task, or a full article. ${sportsInstruction}
+  const prompt = `You are a concise, neutral news editor. Combine the supplied reports about ONE real-world event. Use only the supplied text; do not invent facts or use outside knowledge. Prefer facts repeated or clearly stated by the reports. NEVER mention any publisher, source, website, report, article, journalist, or source attribution in any summary or fact, under any circumstances. Never begin with meta language such as "This article covers", "According to the report", or "The article states". Begin directly with the event and its facts. Write as a finished news summary, not as commentary, analysis, a description of the writing task, or a full article. ${sportsInstruction}
 
-For micro_summary, write a complete and understandable news sentence using no more than 15 words. It must name the main subject and state the key action, result, or event. Never output a fragment, a sentence beginning with a pronoun, a dangling phrase, or a clipped sentence. Include the most important concrete number or score when one is supplied and can fit.
+For micro_summary, write a complete and understandable news sentence using no more than 20 words. It must name the main subject and state the key action, result, or event. Never output a fragment, a sentence beginning with a pronoun, a dangling phrase, or a clipped sentence. Include the most important concrete number or score when one is supplied and can fit.
 
 For summary, write a concise standalone news summary using no more than 40 words. Stop as soon as the essential event, action, result, and concrete facts are clear. Do not expand it into an article, backgrounder, analysis, or commentary.
 
@@ -507,7 +507,7 @@ Return ONLY valid JSON with this exact structure:
 
 CATEGORY: ${items[0].category}
 EVENT IMPORTANCE: ${importance}/10
-REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${item.text}`).join("\n\n")}`;
+  REPORTS:\n\n${items.map((item) => item.text).join("\n\n")}`;
   const summary = await askNemotron(prompt, 1500, "object");
   if (!summary || typeof summary.summary !== "string" || typeof summary.micro_summary !== "string" || typeof summary.extended_summary !== "string" || !summary.facts || typeof summary.facts !== "object") {
     throw new Error("Nemotron returned an invalid event summary");
@@ -521,7 +521,7 @@ REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${it
   return {
     facts,
     summary: limitWords(summary.summary, 40),
-    micro_summary: limitWords(summary.micro_summary, 15),
+    micro_summary: limitWords(summary.micro_summary, 20),
     extended_summary: limitWords(summary.extended_summary, 150),
   };
 }

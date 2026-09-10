@@ -36,8 +36,10 @@
 - [x] Make Extreme Mode enabled by default, and persist the user's choice in browser storage when they switch between Extreme Mode and normal summaries.
 - [x] Eliminate repeated event summarization: separate event classification/grouping from summarization, classify all article batches first, summarize each completed event exactly once after grouping, use compact article titles/source URLs for existing-event context, and summarize independent events with controlled concurrency.
 - [x] Make the Dark Mode and Extreme Mode buttons identical in size, padding, alignment, and touch target dimensions.
-- [x] Limit Extreme Mode summaries to a maximum of 15 words while keeping them complete and understandable.
+- [x] Limit Extreme Mode summaries to a maximum of 20 words while keeping them complete and understandable.
 - [x] Limit normal summaries to a maximum of 40 words while preserving the essential event and concrete facts.
 - [x] Publish a category as empty when no event reaches the publication threshold; do not force-publish the top-ranked below-threshold event.
 - [x] Increase the zoom-out intensity of the A− text-size control while retaining the A+ control.
 - [x] Move the Categories dropdown beside the National and International tabs in the main headlines area.
+- [x] Ensure the AI never mentions a source or publisher name in any summary.
+- [x] Decrease the importance threshold used for publishing events from 0.6 to 0.5.
