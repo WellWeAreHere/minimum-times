@@ -23,7 +23,8 @@ const TEXT_SCALE_PREFERENCE_KEY = "minimum-times-text-scale";
 const DEFAULT_TEXT_SCALE = 1;
 const MIN_TEXT_SCALE = 0.85;
 const MAX_TEXT_SCALE = 1.3;
-const TEXT_SCALE_STEP = 0.1;
+const TEXT_SCALE_DECREASE_STEP = 0.15;
+const TEXT_SCALE_INCREASE_STEP = 0.1;
 
 function formatEditionDate(value: string) {
   const date = new Date(`${value}T00:00:00Z`);
@@ -266,7 +267,7 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={() => updateTextScale(textScale - TEXT_SCALE_STEP)}
+                onClick={() => updateTextScale(textScale - TEXT_SCALE_DECREASE_STEP)}
                 disabled={textScale <= MIN_TEXT_SCALE}
                 aria-label="Decrease text size"
                 title="Decrease text size"
@@ -280,7 +281,7 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={() => updateTextScale(textScale + TEXT_SCALE_STEP)}
+                onClick={() => updateTextScale(textScale + TEXT_SCALE_INCREASE_STEP)}
                 disabled={textScale >= MAX_TEXT_SCALE}
                 aria-label="Increase text size"
                 title="Increase text size"
@@ -310,7 +311,7 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="flex gap-2 mb-10" role="tablist" aria-label="Edition scope">
+        <div className="flex flex-wrap items-center gap-2 mb-10" role="tablist" aria-label="Edition scope">
           {scopes.map((scope) => {
             const isSelected = selectedScope === scope.key;
             return (
@@ -337,6 +338,75 @@ export default function Home() {
               </button>
             );
           })}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setCategoriesOpen((value) => !value)}
+              aria-expanded={categoriesOpen}
+              aria-controls="category-menu"
+              className={`border px-3 py-2 text-xs font-semibold ${
+                darkMode
+                  ? "border-gray-700 text-gray-300 hover:bg-gray-900"
+                  : "border-gray-300 text-gray-700 hover:bg-gray-100"
+              }`}
+            >
+              CATEGORIES {categoriesOpen ? "▲" : "▼"}
+            </button>
+            {categoriesOpen && (
+              <div
+                id="category-menu"
+                className={`absolute left-0 z-10 mt-2 w-72 border p-4 shadow-lg ${
+                  darkMode ? "border-gray-700 bg-black" : "border-gray-300 bg-white"
+                }`}
+              >
+                <p className="mb-3 text-xs font-semibold text-gray-500">VISIBLE CATEGORIES</p>
+                <div className="space-y-3">
+                  {sections.map((section) => (
+                    <label key={section.key} className="flex items-center gap-3 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={visibleCategories.includes(section.key)}
+                        onChange={() => toggleCategory(section.key)}
+                      />
+                      {section.label}
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-4 flex gap-3 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = sections.map((section) => section.key);
+                      setVisibleCategories(next);
+                      try {
+                        window.localStorage.setItem(CATEGORY_PREFERENCE_KEY, JSON.stringify(next));
+                      } catch {
+                        // Ignore unavailable browser storage.
+                      }
+                    }}
+                    className="underline"
+                  >
+                    SELECT ALL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVisibleCategories([]);
+                      try {
+                        window.localStorage.setItem(CATEGORY_PREFERENCE_KEY, JSON.stringify([]));
+                      } catch {
+                        // Ignore unavailable browser storage.
+                      }
+                      setSelectedEvent(null);
+                    }}
+                    className="underline"
+                  >
+                    CLEAR ALL
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 mb-10">
@@ -396,83 +466,6 @@ export default function Home() {
             </button>
           )}
 
-          <div className="relative ml-auto">
-            <button
-              type="button"
-              onClick={() => setCategoriesOpen((value) => !value)}
-              aria-expanded={categoriesOpen}
-              aria-controls="category-menu"
-              className={`border px-3 py-2 text-xs font-semibold ${
-                darkMode
-                  ? "border-gray-700 text-gray-300 hover:bg-gray-900"
-                  : "border-gray-300 text-gray-700 hover:bg-gray-100"
-              }`}
-            >
-              CATEGORIES {categoriesOpen ? "▲" : "▼"}
-            </button>
-
-            {categoriesOpen && (
-              <div
-                id="category-menu"
-                className={`absolute right-0 z-10 mt-2 w-72 border p-4 shadow-lg ${
-                  darkMode
-                    ? "border-gray-700 bg-black"
-                    : "border-gray-300 bg-white"
-                }`}
-              >
-                <p className="mb-3 text-xs font-semibold text-gray-500">
-                  VISIBLE CATEGORIES
-                </p>
-                <div className="space-y-3">
-                  {sections.map((section) => (
-                    <label
-                      key={section.key}
-                      className="flex items-center gap-3 text-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={visibleCategories.includes(section.key)}
-                        onChange={() => toggleCategory(section.key)}
-                      />
-                      {section.label}
-                    </label>
-                  ))}
-                </div>
-                <div className="mt-4 flex gap-3 text-xs font-semibold">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = sections.map((section) => section.key);
-                      setVisibleCategories(next);
-                      try {
-                        window.localStorage.setItem(CATEGORY_PREFERENCE_KEY, JSON.stringify(next));
-                      } catch {
-                        // Ignore unavailable browser storage.
-                      }
-                    }}
-                    className="underline"
-                  >
-                    SELECT ALL
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setVisibleCategories([]);
-                      try {
-                        window.localStorage.setItem(CATEGORY_PREFERENCE_KEY, JSON.stringify([]));
-                      } catch {
-                        // Ignore unavailable browser storage.
-                      }
-                      setSelectedEvent(null);
-                    }}
-                    className="underline"
-                  >
-                    CLEAR ALL
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
 
         {scopes.filter((scope) => scope.key === selectedScope).map((scope) => (

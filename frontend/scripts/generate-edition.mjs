@@ -498,9 +498,9 @@ async function summarizeEventWithNemotron(items, importance) {
     : "For non-sports, facts should contain the most useful concrete names, decisions, numbers, locations, or consequences supplied by the reports.";
   const prompt = `You are a concise, neutral news editor. Combine the supplied reports about ONE real-world event. Use only the supplied text; do not invent facts or use outside knowledge. Prefer facts repeated or clearly stated by sources. Never mention publishers, websites, reports, articles, or sources in the summaries unless that attribution is itself the news. Never begin with meta language such as "This article covers", "According to the report", or "The article states". Begin directly with the event and its facts. Write as a finished news summary, not as commentary, analysis, a description of the writing task, or a full article. ${sportsInstruction}
 
-For micro_summary, write the shortest physically possible complete and understandable news sentence. Do not use a fixed word limit. It must name the main subject and state the key action, result, or event. Never output a fragment, a sentence beginning with a pronoun, a dangling phrase, or a clipped sentence. Include the most important concrete number or score when one is supplied and can fit.
+For micro_summary, write a complete and understandable news sentence using no more than 15 words. It must name the main subject and state the key action, result, or event. Never output a fragment, a sentence beginning with a pronoun, a dangling phrase, or a clipped sentence. Include the most important concrete number or score when one is supplied and can fit.
 
-For summary, write a concise standalone news summary. Do not use a fixed word limit, but stop as soon as the essential event, action, result, and concrete facts are clear. Do not expand it into an article, backgrounder, analysis, or commentary.
+For summary, write a concise standalone news summary using no more than 40 words. Stop as soon as the essential event, action, result, and concrete facts are clear. Do not expand it into an article, backgrounder, analysis, or commentary.
 
 Return ONLY valid JSON with this exact structure:
 {"facts":{"key":"value"},"summary":"concise standalone summary","micro_summary":"short complete summary","extended_summary":"100-150 factual words"}
@@ -520,8 +520,8 @@ REPORTS:\n\n${items.map((item, index) => `SOURCE ${index + 1}: ${item.url}\n${it
   }
   return {
     facts,
-    summary: String(summary.summary).trim(),
-    micro_summary: String(summary.micro_summary).trim(),
+    summary: limitWords(summary.summary, 40),
+    micro_summary: limitWords(summary.micro_summary, 15),
     extended_summary: limitWords(summary.extended_summary, 150),
   };
 }
@@ -931,7 +931,7 @@ for (const scope of scopes) {
 
     const rankedEvents = [...events].sort((a, b) => b.rating - a.rating);
     const publishedEvents = rankedEvents
-      .filter((event, index) => index === 0 || event.rating >= EVENT_PUBLISH_THRESHOLD)
+      .filter((event) => event.rating >= EVENT_PUBLISH_THRESHOLD)
       .slice(0, maxPerCategory);
     publishedEvents.forEach((event) => {
       const publishedEvent = {
